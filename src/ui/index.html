@@ -1,0 +1,127 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>RCST - 即時字幕</title>
+    <link href="https://fonts.googleapis.com/css2?family=Playfair+Display:wght@600&family=Noto+Sans+SC:wght@400;500;700&display=swap" rel="stylesheet">
+    <style>
+        :root {
+            --bg-primary: #0a0a0a;
+            --bg-secondary: #141414;
+            --text-primary: #f5f5f5;
+            --accent-gold: #d4af37;
+            --font-display: 'Playfair Display', serif;
+            --font-body: 'Noto Sans SC', sans-serif;
+        }
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: var(--font-body);
+            background: var(--bg-primary);
+            color: var(--text-primary);
+            height: 100vh;
+            display: flex;
+            flex-direction: column;
+        }
+        .header {
+            padding: 1rem 2rem;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        .logo {
+            font-family: var(--font-display);
+            font-size: 1.25rem;
+            color: var(--accent-gold);
+        }
+        .status { font-size: 0.75rem; color: #666; }
+        .status.live { color: #4ade80; }
+        .caption-container {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            padding: 2rem;
+            gap: 1rem;
+        }
+        .caption-box {
+            width: 100%;
+            max-width: 1400px;
+            background: var(--bg-secondary);
+            border-radius: 8px;
+            padding: 2.5rem 4rem;
+            border-top: 2px solid var(--accent-gold);
+        }
+        .caption-label {
+            font-size: 0.65rem;
+            text-transform: uppercase;
+            letter-spacing: 0.15em;
+            color: var(--accent-gold);
+            margin-bottom: 0.75rem;
+        }
+        .caption-text {
+            font-size: clamp(2rem, 4vw, 3rem);
+            line-height: 1.4;
+        }
+        .caption-text.fade-in {
+            animation: fadeIn 0.4s ease-out;
+        }
+        @keyframes fadeIn {
+            from { opacity: 0; transform: translateY(10px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+    </style>
+</head>
+<body>
+    <header class="header">
+        <div class="logo">RCST</div>
+        <div class="status" id="status">Connecting...</div>
+    </header>
+
+    <main class="caption-container">
+        <div class="caption-box">
+            <div class="caption-label">English</div>
+            <div class="caption-text" id="enText"></div>
+        </div>
+        <div class="caption-box">
+            <div class="caption-label">中文翻譯</div>
+            <div class="caption-text" id="zhText"></div>
+        </div>
+    </main>
+
+    <script>
+        const enText = document.getElementById('enText');
+        const zhText = document.getElementById('zhText');
+        const status = document.getElementById('status');
+
+        function connectSSE() {
+            const eventSource = new EventSource('/stream');
+
+            eventSource.addEventListener('caption', (event) => {
+                const data = JSON.parse(event.data);
+
+                // Animate text change
+                [enText, zhText].forEach(el => {
+                    el.classList.remove('fade-in');
+                    void el.offsetWidth;
+                    el.classList.add('fade-in');
+                });
+
+                enText.textContent = data.en;
+                zhText.textContent = data.zh;
+                status.textContent = 'Live';
+                status.classList.add('live');
+            });
+
+            eventSource.onerror = () => {
+                status.textContent = 'Reconnecting...';
+                status.classList.remove('live');
+                setTimeout(connectSSE, 3000);
+            };
+        }
+
+        connectSSE();
+    </script>
+</body>
+</html>
