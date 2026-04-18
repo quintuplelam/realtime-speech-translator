@@ -22,14 +22,15 @@ class AudioPipeline:
         stream_url: str,
         vad: Optional[SileroVAD] = None,
         asr: Optional[VoxtralASR] = None,
-        translator: Optional[Translator] = None
+        translator: Optional[Translator] = None,
+        mock_mode: bool = False
     ):
         from src.api.audio_stream import AudioStreamConnector
 
         self.stream_url = stream_url
         self.stream = AudioStreamConnector(stream_url)
         self.vad = vad or SileroVAD()
-        self.asr = asr or VoxtralASR()
+        self.asr = asr or VoxtralASR(mock_mode=mock_mode)
         self.translator = translator or Translator()
 
         self._buffer: List[torch.Tensor] = []
@@ -48,7 +49,13 @@ class AudioPipeline:
         if not self.vad.is_speech_end(audio, min_silence_ms=500):
             # Put it back if not a complete sentence
             self._buffer.append(audio)
-            return None
+
+            # Timeout: process anyway if buffer too large (>10 seconds)
+            if audio.shape[1] > 16000 * 10:
+                # Force process - treat as complete sentence
+                pass
+            else:
+                return None
 
         # Save temp WAV for Voxtral
         import tempfile
@@ -83,7 +90,11 @@ class AudioPipeline:
         self.stream.start()
 
         try:
-            async for chunk in self.stream.get_chunks():
+            # Use sync iterator in async context
+            for chunk in self.stream.get_chunks():
+                if not self.stream._running:
+                    break
+
                 self._buffer.append(chunk)
 
                 # Try to process a sentence

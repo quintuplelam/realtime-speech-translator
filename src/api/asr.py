@@ -1,5 +1,6 @@
 import subprocess
 import shlex
+import random
 from pathlib import Path
 from typing import Optional
 
@@ -7,11 +8,14 @@ class VoxtralNotFoundError(Exception):
     pass
 
 class VoxtralASR:
-    def __init__(self, model_path: Optional[str] = None):
+    def __init__(self, model_path: Optional[str] = None, mock_mode: bool = False):
         self.model_path = model_path
+        self.mock_mode = mock_mode
 
     def check_cli(self) -> bool:
         """Check if voxtral CLI is available."""
+        if self.mock_mode:
+            return True
         try:
             result = subprocess.run(
                 ["voxtral", "--help"],
@@ -24,6 +28,17 @@ class VoxtralASR:
 
     def transcribe(self, audio_path: str) -> Optional[str]:
         """Transcribe audio file to text using voxtral CLI."""
+        if self.mock_mode:
+            # Return mock transcript for testing
+            mock_sentences = [
+                "Welcome to the program.",
+                "Today we have exciting news to share.",
+                "Thank you for listening.",
+                "This is a test of the speech recognition system.",
+                "NPR brings you news from around the world.",
+            ]
+            return random.choice(mock_sentences)
+
         if not self.check_cli():
             raise VoxtralNotFoundError("voxtral CLI not found. Install from TrevorS/voxtral-mini-realtime-rs")
 

@@ -41,6 +41,7 @@
         }
         .status { font-size: 0.75rem; color: #666; }
         .status.live { color: #4ade80; }
+        .status.processing { color: #f59e0b; }
         .demo-btn {
             background: transparent;
             border: 1px solid var(--accent-gold);
@@ -54,17 +55,9 @@
             cursor: pointer;
             transition: all 0.3s ease;
         }
-        .demo-btn:hover {
-            background: rgba(212, 175, 55, 0.1);
-        }
-        .demo-btn.active {
-            background: var(--accent-gold);
-            color: var(--bg-primary);
-        }
-        .demo-btn.loading {
-            opacity: 0.5;
-            cursor: not-allowed;
-        }
+        .demo-btn:hover { background: rgba(212, 175, 55, 0.1); }
+        .demo-btn.active { background: var(--accent-gold); color: var(--bg-primary); }
+        .demo-btn.loading { opacity: 0.5; cursor: not-allowed; }
         .caption-container {
             flex: 1;
             display: flex;
@@ -101,9 +94,16 @@
             from { opacity: 0; transform: translateY(10px); }
             to { opacity: 1; transform: translateY(0); }
         }
-        /* Hidden audio element */
-        #audioPlayer {
-            display: none;
+        /* Hidden audio elements */
+        #audioPlayer { display: none; }
+        #hiddenAudio { display: none; }
+        .debug-info {
+            position: fixed;
+            bottom: 1rem;
+            left: 1rem;
+            font-size: 0.65rem;
+            color: #444;
+            font-family: monospace;
         }
     </style>
 </head>
@@ -118,6 +118,8 @@
 
     <!-- Hidden audio player for NPR stream -->
     <audio id="audioPlayer" controls></audio>
+    <!-- Hidden audio for audio context -->
+    <audio id="hiddenAudio" crossorigin="anonymous"></audio>
 
     <main class="caption-container">
         <div class="caption-box">
@@ -130,6 +132,8 @@
         </div>
     </main>
 
+    <div class="debug-info" id="debugInfo"></div>
+
     <script>
         const NPR_STREAM_URL = 'https://npr-ice.streamguys1.com/live.mp3';
         const enText = document.getElementById('enText');
@@ -137,128 +141,254 @@
         const status = document.getElementById('status');
         const demoBtn = document.getElementById('demoBtn');
         const audioPlayer = document.getElementById('audioPlayer');
+        const hiddenAudio = document.getElementById('hiddenAudio');
+        const debugInfo = document.getElementById('debugInfo');
 
         let eventSource = null;
         let currentMode = 'demo'; // 'demo' or 'live'
-        let currentPipelineId = null;
+        let audioContext = null;
+        let processor = null;
+        let sourceNode = null;
+        let mediaStream = null;
+        let isProcessing = false;
+        let audioBuffer = [];
 
-        // Connect to SSE endpoint
-        function connectSSE(endpoint) {
+        const SAMPLE_RATE = 16000;
+        const CHUNK_DURATION_MS = 3000;
+        const CHUNK_SIZE = Math.floor(SAMPLE_RATE * CHUNK_DURATION_MS / 1000);
+
+        function updateDebug(msg) {
+            debugInfo.textContent = msg;
+        }
+
+        // Connect to demo SSE
+        function connectDemoSSE() {
             if (eventSource) {
                 eventSource.close();
             }
 
-            status.textContent = 'Connecting...';
+            status.textContent = 'Demo Mode';
             demoBtn.classList.add('loading');
 
-            eventSource = new EventSource(endpoint);
+            eventSource = new EventSource('/stream');
 
             eventSource.addEventListener('caption', (event) => {
                 const data = JSON.parse(event.data);
-
-                // Animate text change
-                [enText, zhText].forEach(el => {
-                    el.classList.remove('fade-in');
-                    void el.offsetWidth;
-                    el.classList.add('fade-in');
-                });
-
-                enText.textContent = data.en;
-                zhText.textContent = data.zh;
-                status.textContent = currentMode === 'live' ? 'Live: NPR' : 'Demo Mode';
+                animateText(enText, data.en);
+                animateText(zhText, data.zh);
+                status.textContent = 'Demo Mode';
                 status.classList.add('live');
                 demoBtn.classList.remove('loading');
             });
 
             eventSource.onerror = () => {
                 status.textContent = 'Reconnecting...';
-                status.classList.remove('live');
                 demoBtn.classList.add('loading');
-                setTimeout(() => {
-                    if (currentMode === 'live' && currentPipelineId) {
-                        startLiveMode();
-                    } else {
-                        connectSSE('/stream');
-                    }
-                }, 3000);
+                setTimeout(connectDemoSSE, 3000);
             };
         }
 
-        // Start live NPR mode
+        function animateText(el, text) {
+            el.classList.remove('fade-in');
+            void el.offsetWidth;
+            el.classList.add('fade-in');
+            el.textContent = text;
+        }
+
+        // Start live NPR mode with audio capture
         async function startLiveMode() {
             try {
-                // Start pipeline via API
-                const response = await fetch('/pipeline/start', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ stream_url: NPR_STREAM_URL })
-                });
+                // Start audio playback using hidden audio element
+                hiddenAudio.src = NPR_STREAM_URL;
+                hiddenAudio.crossOrigin = 'anonymous';
 
-                if (!response.ok) {
-                    throw new Error('Failed to start pipeline');
-                }
+                await hiddenAudio.play();
 
-                const { pipeline_id } = await response.json();
-                currentPipelineId = pipeline_id;
+                // Create audio context
+                audioContext = new (window.AudioContext || window.webkitAudioContext)();
 
-                // Start audio playback
-                audioPlayer.src = NPR_STREAM_URL;
-                audioPlayer.play().catch(e => console.log('Audio autoplay blocked:', e));
+                // Create stream from audio element
+                const stream = hiddenAudio.captureStream ? hiddenAudio.captureStream() : audioContext.createMediaStreamSource(hiddenAudio);
+                mediaStream = stream;
 
-                // Connect to SSE
+                // Create script processor for audio capture
+                processor = audioContext.createScriptProcessor(4096, 1, 1);
+                sourceNode = audioContext.createMediaStreamSource(stream);
+                sourceNode.connect(processor);
+                processor.connect(audioContext.destination);
+
+                audioBuffer = [];
+
+                processor.onaudioprocess = (e) => {
+                    if (currentMode !== 'live' || isProcessing) return;
+
+                    const inputData = e.inputBuffer.getChannelData(0);
+
+                    // Convert float32 to int16 PCM and add to buffer
+                    for (let i = 0; i < inputData.length; i++) {
+                        audioBuffer.push(inputData[i]);
+                    }
+
+                    // When we have enough samples, send to backend
+                    if (audioBuffer.length >= CHUNK_SIZE) {
+                        const chunk = audioBuffer.slice(0, CHUNK_SIZE);
+                        audioBuffer = audioBuffer.slice(CHUNK_SIZE);
+
+                        sendAudioChunk(chunk);
+                    }
+                };
+
                 currentMode = 'live';
                 demoBtn.classList.add('active');
                 demoBtn.textContent = 'Live: NPR';
-                connectSSE(`/pipeline/${pipeline_id}/stream`);
+                status.textContent = 'Live: NPR';
+                status.classList.add('live');
+                status.classList.remove('processing');
+                demoBtn.classList.remove('loading');
 
             } catch (error) {
                 console.error('Failed to start live mode:', error);
-                status.textContent = 'Error';
+                status.textContent = 'Error: ' + error.message;
                 demoBtn.classList.remove('loading');
                 // Fallback to demo mode
                 currentMode = 'demo';
                 demoBtn.classList.remove('active');
                 demoBtn.textContent = 'Demo Mode';
-                connectSSE('/stream');
+                connectDemoSSE();
+            }
+        }
+
+        // Send audio chunk to backend
+        async function sendAudioChunk(float32Data) {
+            if (isProcessing) return;
+            isProcessing = true;
+
+            try {
+                status.textContent = 'Processing...';
+                status.classList.add('processing');
+
+                // Convert float32 to WAV bytes
+                const wavBytes = float32ToWav(float32Data, SAMPLE_RATE);
+
+                const response = await fetch('/audio', {
+                    method: 'POST',
+                    body: wavBytes,
+                    headers: {
+                        'Content-Type': 'audio/wav'
+                    }
+                });
+
+                if (!response.ok) {
+                    throw new Error('Failed to process audio');
+                }
+
+                const result = await response.json();
+
+                if (result.en) {
+                    animateText(enText, result.en);
+                    animateText(zhText, result.zh);
+                    updateDebug(`Sent ${float32Data.length} samples, got: "${result.en}"`);
+                }
+
+                status.textContent = 'Live: NPR';
+                status.classList.remove('processing');
+                status.classList.add('live');
+
+            } catch (error) {
+                console.error('Audio processing error:', error);
+                status.textContent = 'Error';
+                updateDebug('Error: ' + error.message);
+            } finally {
+                isProcessing = false;
+            }
+        }
+
+        // Convert float32 PCM to WAV format
+        function float32ToWav(float32Data, sampleRate) {
+            const numSamples = float32Data.length;
+            const byteRate = sampleRate * 2; // 16-bit = 2 bytes per sample
+            const blockAlign = 2; // 16-bit mono
+
+            const buffer = new ArrayBuffer(44 + numSamples * 2);
+            const view = new DataView(buffer);
+
+            // WAV header
+            writeString(view, 0, 'RIFF');
+            view.setUint32(4, 36 + numSamples * 2, true);
+            writeString(view, 8, 'WAVE');
+            writeString(view, 12, 'fmt ');
+            view.setUint32(16, 16, true); // Subchunk1Size
+            view.setUint16(20, 1, true); // AudioFormat (PCM)
+            view.setUint16(22, 1, true); // NumChannels (mono)
+            view.setUint32(24, sampleRate, true); // SampleRate
+            view.setUint32(28, byteRate, true); // ByteRate
+            view.setUint16(32, blockAlign, true); // BlockAlign
+            view.setUint16(34, 16, true); // BitsPerSample
+            writeString(view, 36, 'data');
+            view.setUint32(40, numSamples * 2, true); // Subchunk2Size
+
+            // PCM data
+            let offset = 44;
+            for (let i = 0; i < numSamples; i++) {
+                const sample = Math.max(-1, Math.min(1, float32Data[i]));
+                const intSample = sample < 0 ? sample * 0x8000 : sample * 0x7FFF;
+                view.setInt16(offset, intSample, true);
+                offset += 2;
+            }
+
+            return buffer;
+        }
+
+        function writeString(view, offset, string) {
+            for (let i = 0; i < string.length; i++) {
+                view.setUint8(offset + i, string.charCodeAt(i));
             }
         }
 
         // Stop live mode
-        async function stopLiveMode() {
-            if (currentPipelineId) {
-                try {
-                    await fetch('/pipeline/stop', {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({ pipeline_id: currentPipelineId })
-                    });
-                } catch (e) {
-                    console.log('Failed to stop pipeline:', e);
-                }
-                currentPipelineId = null;
+        function stopLiveMode() {
+            currentMode = 'demo';
+
+            // Stop audio processing
+            if (processor) {
+                processor.disconnect();
+                processor = null;
+            }
+            if (sourceNode) {
+                sourceNode.disconnect();
+                sourceNode = null;
+            }
+            if (audioContext) {
+                audioContext.close();
+                audioContext = null;
+            }
+            if (mediaStream) {
+                mediaStream.getTracks().forEach(track => track.stop());
+                mediaStream = null;
             }
 
-            audioPlayer.pause();
-            audioPlayer.src = '';
+            hiddenAudio.pause();
+            hiddenAudio.src = '';
 
-            currentMode = 'demo';
             demoBtn.classList.remove('active');
             demoBtn.textContent = 'Demo Mode';
             status.textContent = 'Demo Mode';
+            status.classList.remove('live', 'processing');
+            updateDebug('');
         }
 
         // Toggle button handler
         demoBtn.addEventListener('click', async () => {
             if (currentMode === 'live') {
-                await stopLiveMode();
-                connectSSE('/stream');
+                stopLiveMode();
+                connectDemoSSE();
             } else {
                 await startLiveMode();
             }
         });
 
         // Default: connect to demo stream
-        connectSSE('/stream');
+        connectDemoSSE();
     </script>
 </body>
 </html>

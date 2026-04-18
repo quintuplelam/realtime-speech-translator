@@ -5,24 +5,23 @@ A low-latency, GPU-accelerated speech-to-text translation system for conferences
 ## Architecture
 
 ```
-┌─────────────────────────────────────────────────────────────┐
-│                    Vue.js Frontend                         │
-│         (src/ui/) - Netflix-style bilingual subtitles       │
-└─────────────────────────────────────────────────────────────┘
-                           ▲ SSE
-                           │
-┌─────────────────────────────────────────────────────────────┐
-│                 FastAPI Backend (src/api/)                  │
-│  - SSE stream push  - Translation logging to .md             │
-└─────────────────────────────────────────────────────────────┘
-                           │
-         ┌─────────────────┼─────────────────┐
-         ▼                 ▼                 ▼
-┌──────────────┐  ┌──────────────┐  ┌──────────────┐
-│    Voxtral   │  │    Argos     │  │   Session    │
-│   Mini 4B    │  │  Translate   │  │    Logger    │
-│  (ASR/Rust)  │  │ (EN↔ZH CTranslate2) │  (to .md) │
-└──────────────┘  └──────────────┘  └──────────────┘
+┌─────────────────────────────────────────────────────────────────┐
+│                    Vue.js Frontend                             │
+│  - HTML5 Audio (plays NPR stream)                              │
+│  - Web Audio API (captures audio chunks)                        │
+│  - SSE connection (receives translations)                     │
+│  - Netflix-style bilingual subtitles                           │
+└─────────────────────────────────────────────────────────────────┘
+                              ▲
+                              │ SSE (translation results)
+                              │
+┌─────────────────────────────────────────────────────────────────┐
+│                 FastAPI Backend (src/api/)                      │
+│  - POST /audio (receives audio chunks)                          │
+│  - GET /stream (SSE for translation results)                   │
+│  - Voxtral ASR + Argos Translate                               │
+│  - Session logging to .md                                      │
+└─────────────────────────────────────────────────────────────────┘
 ```
 
 ## Tech Stack
@@ -32,76 +31,36 @@ A low-latency, GPU-accelerated speech-to-text translation system for conferences
 | **ASR Engine** | Voxtral Mini 4B Realtime (Rust) | Q4 GGUF ~2.5GB, RTA ~0.4 |
 | **VAD** | Silero VAD | Voice activity detection |
 | **Translation** | Argos Translate (CTranslate2) | EN↔ZH local inference |
-| **Backend** | FastAPI (Python) | SSE streaming, async |
+| **Backend** | FastAPI (Python) | REST + SSE streaming |
 | **Frontend** | Vue 3 + Vanilla JS | Single HTML, no build required |
 | **Audio Source** | Network Broadcast Streams | NPR, BBC, etc. |
 
-## Quick Start
+## Key Design: Audio Separation
 
-### 1. Install Dependencies
+**Problem:** Original design had audio flowing through two paths (server ffmpeg + frontend playback), causing:
+- Bandwidth waste
+- SSE connection instability
+- Complex error handling
 
-```bash
-# Create venv
-python3.11 -m venv venv
-source venv/bin/activate
+**Solution:** Clean separation of concerns
 
-# Install Python deps
-pip install -r requirements.txt
-
-# Install Voxtral CLI (Rust)
-cargo install voxtral --features wgpu,cli,hub
+```
+[NPR Stream] ──> [HTML5 Audio: frontend only] ──> [Web Audio API: capture] ──> [POST /audio] ──> [Backend processing] ──> [SSE results]
 ```
 
-### 2. Install Translation Models
-
-```bash
-# Argos Translate (auto-downloads on first use)
-argospm update
-argospm install translate-en_zh
-```
-
-### 3. Run Backend
-
-```bash
-# Start FastAPI server
-uvicorn src.api.main:app --host 0.0.0.0 --port 8000 --reload
-```
-
-### 4. Open Frontend
-
-```bash
-# In browser
-open http://localhost:8000/src/ui/index.html
-```
-
-## Testing with Broadcast Streams
-
-### NPR News (English)
-
-```bash
-# Test stream connection
-ffmpeg -i "https://npr-ice.streamguys1.com/live.mp3" -t 10 -ar 16000 -ac 1 test_audio.wav
-
-# Start real-time pipeline
-python -m src.api.pipeline --stream-url "https://npr-ice.streamguys1.com/live.mp3"
-```
-
-### Available Test Streams
-
-| Station | Language | URL |
-|---------|----------|-----|
-| NPR News | English | `https://npr-ice.streamguys1.com/live.mp3` |
-| BBC World Service | English | `http://stream.live.vc.bbcmedia.co.uk/bbc_world_service` |
-| RFI Monde | French | `http://live-broadcast.rfi.fr/rfimonde-high.mp3` |
+**Benefits:**
+1. Audio plays in one place only
+2. SSE only carries text (not audio bytes)
+3. Frontend controls playback + capture
+4. Backend is stateless for audio transport
 
 ## API Endpoints
 
 | Method | Path | Description |
 |--------|------|-------------|
 | `GET` | `/health` | Health check |
-| `GET` | `/stream` | SSE stream of `{en, zh, timestamp}` |
-| `POST` | `/audio` | Receive audio for processing |
-| `POST` | `/session/start` | Start a new session logger |
+| `POST` | `/audio` | Receive audio chunk, return transcription + translation |
+| `GET` | `/stream` | SSE stream for receiving translations (demo mode) |
 
 ## Session Logs
 
@@ -122,19 +81,68 @@ Sessions are saved to `sessions/{session_id}/session.md`:
 realtime-speech-translator/
 ├── src/
 │   ├── api/
-│   │   ├── main.py          # FastAPI app + SSE + endpoints
+│   │   ├── main.py          # FastAPI app + endpoints
 │   │   ├── asr.py           # Voxtral subprocess wrapper
 │   │   ├── translator.py    # Argos Translate wrapper
 │   │   ├── logger.py        # Session markdown logger
-│   │   └── pipeline.py      # Audio pipeline (VAD → ASR → Translate)
+│   │   ├── vad.py          # Silero VAD wrapper
+│   │   └── pipeline.py      # Audio processing pipeline
 │   └── ui/
-│       ├── demo.html        # Demo frontend
-│       └── index.html       # Production frontend
+│       ├── index.html       # Production frontend
+│       └── demo.html       # Demo mode frontend
 ├── tests/
 ├── docs/
 ├── sessions/                # Generated session logs
 └── requirements.txt
 ```
+
+## Quick Start
+
+### 1. Install Dependencies
+
+```bash
+# Create venv
+python3.11 -m venv venv
+source venv/bin/activate
+
+# Install Python deps
+pip install -r requirements.txt
+
+# Install Voxtral CLI (Rust)
+cargo install voxtral --features wgpu,cli,hub
+```
+
+### 2. Run Backend
+
+```bash
+uvicorn src.api.main:app --host 0.0.0.0 --port 8000 --reload
+```
+
+### 3. Open Frontend
+
+```bash
+# In browser
+open http://localhost:8000/ui/index.html
+
+# Click "Live: NPR" button to start
+```
+
+## Testing with Broadcast Streams
+
+### NPR News (English)
+
+```bash
+# Test stream connection
+curl -I "https://npr-ice.streamguys1.com/live.mp3"
+```
+
+### Available Test Streams
+
+| Station | Language | URL |
+|---------|----------|-----|
+| NPR News | English | `https://npr-ice.streamguys1.com/live.mp3` |
+| BBC World Service | English | `http://stream.live.vc.bbcmedia.co.uk/bbc_world_service` |
+| RFI Monde | French | `http://live-broadcast.rfi.fr/rfimonde-high.mp3` |
 
 ## License
 
