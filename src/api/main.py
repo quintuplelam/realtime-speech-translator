@@ -14,6 +14,7 @@ app = FastAPI(title="RCST API")
 
 # Global instances
 session_logger: Optional[SessionLogger] = None
+active_pipelines = {}
 
 # Translator optional - may not be available if argostranslate deps missing
 try:
@@ -22,11 +23,11 @@ try:
 except ImportError:
     translator = None
 
-@app.get("/health")
+@ app.get("/health")
 async def health():
     return JSONResponse({"status": "ok", "timestamp": datetime.now().isoformat()})
 
-@app.get("/stream")
+@ app.get("/stream")
 async def stream(request: Request):
     """SSE endpoint for real-time caption stream."""
     async def event_generator():
@@ -53,13 +54,12 @@ async def stream(request: Request):
 
     return EventSourceResponse(event_generator())
 
-@app.post("/audio")
+@ app.post("/audio")
 async def audio(audio_data: bytes = None):
     """Receive audio and process through pipeline."""
-    # TODO: Implement actual Voxtral processing
     return JSONResponse({"status": "received", "length": len(audio_data) if audio_data else 0})
 
-@app.post("/session/start")
+@ app.post("/session/start")
 async def start_session(session_id: str = None):
     """Start a new session logger."""
     global session_logger
@@ -67,3 +67,45 @@ async def start_session(session_id: str = None):
         session_id = datetime.now().strftime("%Y%m%d_%H%M%S")
     session_logger = SessionLogger("sessions", session_id)
     return JSONResponse({"session_id": session_id, "path": str(session_logger.session_dir)})
+
+@ app.post("/pipeline/start")
+async def start_pipeline(stream_url: str):
+    """Start a broadcast stream pipeline."""
+    from src.api.pipeline import AudioPipeline
+    pipeline_id = datetime.now().strftime("%Y%m%d_%H%M%S")
+    pipeline = AudioPipeline(stream_url)
+    active_pipelines[pipeline_id] = pipeline
+    return {"pipeline_id": pipeline_id, "stream_url": stream_url}
+
+@ app.get("/pipeline/{pipeline_id}/stream")
+async def pipeline_stream(pipeline_id: str):
+    """SSE stream for pipeline captions."""
+    from src.api.pipeline import AudioPipeline, CaptionEvent
+
+    pipeline = active_pipelines.get(pipeline_id)
+    if not pipeline:
+        return JSONResponse({"error": "Pipeline not found"}, status_code=404)
+
+    async def event_generator():
+        async def callback(event: CaptionEvent):
+            data = {
+                "en": event.en,
+                "zh": event.zh,
+                "timestamp": event.timestamp
+            }
+            yield {
+                "event": "caption",
+                "data": json.dumps(data)
+            }
+
+        await pipeline.run(callback)
+
+    return EventSourceResponse(event_generator())
+
+@ app.post("/pipeline/stop")
+async def stop_pipeline(pipeline_id: str):
+    """Stop a running pipeline."""
+    pipeline = active_pipelines.pop(pipeline_id, None)
+    if pipeline:
+        pipeline.stream.stop()
+    return {"status": "stopped"}
