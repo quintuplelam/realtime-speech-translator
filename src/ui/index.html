@@ -34,8 +34,37 @@
             font-size: 1.25rem;
             color: var(--accent-gold);
         }
+        .header-right {
+            display: flex;
+            align-items: center;
+            gap: 1rem;
+        }
         .status { font-size: 0.75rem; color: #666; }
         .status.live { color: #4ade80; }
+        .demo-btn {
+            background: transparent;
+            border: 1px solid var(--accent-gold);
+            color: var(--accent-gold);
+            padding: 0.5rem 1rem;
+            border-radius: 4px;
+            font-size: 0.75rem;
+            font-family: var(--font-body);
+            text-transform: uppercase;
+            letter-spacing: 0.1em;
+            cursor: pointer;
+            transition: all 0.3s ease;
+        }
+        .demo-btn:hover {
+            background: rgba(212, 175, 55, 0.1);
+        }
+        .demo-btn.active {
+            background: var(--accent-gold);
+            color: var(--bg-primary);
+        }
+        .demo-btn.loading {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
         .caption-container {
             flex: 1;
             display: flex;
@@ -63,6 +92,7 @@
         .caption-text {
             font-size: clamp(2rem, 4vw, 3rem);
             line-height: 1.4;
+            min-height: 1.4em;
         }
         .caption-text.fade-in {
             animation: fadeIn 0.4s ease-out;
@@ -71,13 +101,23 @@
             from { opacity: 0; transform: translateY(10px); }
             to { opacity: 1; transform: translateY(0); }
         }
+        /* Hidden audio element */
+        #audioPlayer {
+            display: none;
+        }
     </style>
 </head>
 <body>
     <header class="header">
         <div class="logo">RCST</div>
-        <div class="status" id="status">Connecting...</div>
+        <div class="header-right">
+            <div class="status" id="status">Ready</div>
+            <button class="demo-btn" id="demoBtn">Demo Mode</button>
+        </div>
     </header>
+
+    <!-- Hidden audio player for NPR stream -->
+    <audio id="audioPlayer" controls></audio>
 
     <main class="caption-container">
         <div class="caption-box">
@@ -91,12 +131,27 @@
     </main>
 
     <script>
+        const NPR_STREAM_URL = 'https://npr-ice.streamguys1.com/live.mp3';
         const enText = document.getElementById('enText');
         const zhText = document.getElementById('zhText');
         const status = document.getElementById('status');
+        const demoBtn = document.getElementById('demoBtn');
+        const audioPlayer = document.getElementById('audioPlayer');
 
-        function connectSSE() {
-            const eventSource = new EventSource('/stream');
+        let eventSource = null;
+        let currentMode = 'demo'; // 'demo' or 'live'
+        let currentPipelineId = null;
+
+        // Connect to SSE endpoint
+        function connectSSE(endpoint) {
+            if (eventSource) {
+                eventSource.close();
+            }
+
+            status.textContent = 'Connecting...';
+            demoBtn.classList.add('loading');
+
+            eventSource = new EventSource(endpoint);
 
             eventSource.addEventListener('caption', (event) => {
                 const data = JSON.parse(event.data);
@@ -110,18 +165,100 @@
 
                 enText.textContent = data.en;
                 zhText.textContent = data.zh;
-                status.textContent = 'Live';
+                status.textContent = currentMode === 'live' ? 'Live: NPR' : 'Demo Mode';
                 status.classList.add('live');
+                demoBtn.classList.remove('loading');
             });
 
             eventSource.onerror = () => {
                 status.textContent = 'Reconnecting...';
                 status.classList.remove('live');
-                setTimeout(connectSSE, 3000);
+                demoBtn.classList.add('loading');
+                setTimeout(() => {
+                    if (currentMode === 'live' && currentPipelineId) {
+                        startLiveMode();
+                    } else {
+                        connectSSE('/stream');
+                    }
+                }, 3000);
             };
         }
 
-        connectSSE();
+        // Start live NPR mode
+        async function startLiveMode() {
+            try {
+                // Start pipeline via API
+                const response = await fetch('/pipeline/start', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ stream_url: NPR_STREAM_URL })
+                });
+
+                if (!response.ok) {
+                    throw new Error('Failed to start pipeline');
+                }
+
+                const { pipeline_id } = await response.json();
+                currentPipelineId = pipeline_id;
+
+                // Start audio playback
+                audioPlayer.src = NPR_STREAM_URL;
+                audioPlayer.play().catch(e => console.log('Audio autoplay blocked:', e));
+
+                // Connect to SSE
+                currentMode = 'live';
+                demoBtn.classList.add('active');
+                demoBtn.textContent = 'Live: NPR';
+                connectSSE(`/pipeline/${pipeline_id}/stream`);
+
+            } catch (error) {
+                console.error('Failed to start live mode:', error);
+                status.textContent = 'Error';
+                demoBtn.classList.remove('loading');
+                // Fallback to demo mode
+                currentMode = 'demo';
+                demoBtn.classList.remove('active');
+                demoBtn.textContent = 'Demo Mode';
+                connectSSE('/stream');
+            }
+        }
+
+        // Stop live mode
+        async function stopLiveMode() {
+            if (currentPipelineId) {
+                try {
+                    await fetch('/pipeline/stop', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ pipeline_id: currentPipelineId })
+                    });
+                } catch (e) {
+                    console.log('Failed to stop pipeline:', e);
+                }
+                currentPipelineId = null;
+            }
+
+            audioPlayer.pause();
+            audioPlayer.src = '';
+
+            currentMode = 'demo';
+            demoBtn.classList.remove('active');
+            demoBtn.textContent = 'Demo Mode';
+            status.textContent = 'Demo Mode';
+        }
+
+        // Toggle button handler
+        demoBtn.addEventListener('click', async () => {
+            if (currentMode === 'live') {
+                await stopLiveMode();
+                connectSSE('/stream');
+            } else {
+                await startLiveMode();
+            }
+        });
+
+        // Default: connect to demo stream
+        connectSSE('/stream');
     </script>
 </body>
 </html>
