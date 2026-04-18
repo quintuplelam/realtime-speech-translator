@@ -1,0 +1,406 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>RCST - 实时字幕演示</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Playfair+Display:wght@400;600;700&family=Noto+Sans+SC:wght@300;400;500;700&family=Source+Code+Pro:wght@400;500&display=swap" rel="stylesheet">
+    <style>
+        :root {
+            --bg-primary: #0a0a0a;
+            --bg-secondary: #141414;
+            --bg-subtle: #1a1a1a;
+            --text-primary: #f5f5f5;
+            --text-secondary: #a0a0a0;
+            --accent-gold: #d4af37;
+            --accent-gold-dim: #a08428;
+            --shadow-glow: rgba(212, 175, 55, 0.15);
+            --font-display: 'Playfair Display', 'Noto Serif SC', serif;
+            --font-body: 'Noto Sans SC', 'Source Han Sans SC', sans-serif;
+            --font-mono: 'Source Code Pro', monospace;
+        }
+
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        html, body {
+            height: 100%;
+            overflow: hidden;
+        }
+
+        body {
+            font-family: var(--font-body);
+            background: var(--bg-primary);
+            color: var(--text-primary);
+            display: flex;
+            flex-direction: column;
+        }
+
+        /* Header Bar */
+        .header {
+            padding: 1rem 2rem;
+            background: linear-gradient(180deg, rgba(20,20,20,0.95) 0%, rgba(10,10,10,0) 100%);
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            z-index: 10;
+        }
+
+        .logo {
+            font-family: var(--font-display);
+            font-size: 1.25rem;
+            font-weight: 600;
+            letter-spacing: 0.1em;
+            color: var(--accent-gold);
+            text-transform: uppercase;
+        }
+
+        .status-indicator {
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+            font-size: 0.75rem;
+            color: var(--text-secondary);
+            font-family: var(--font-mono);
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+        }
+
+        .status-dot {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            background: var(--accent-gold);
+            animation: pulse 2s ease-in-out infinite;
+        }
+
+        .status-dot.live {
+            background: #4ade80;
+            animation: pulse-live 1.5s ease-in-out infinite;
+        }
+
+        @keyframes pulse {
+            0%, 100% { opacity: 0.5; transform: scale(1); }
+            50% { opacity: 1; transform: scale(1.2); }
+        }
+
+        @keyframes pulse-live {
+            0%, 100% { opacity: 1; box-shadow: 0 0 0 0 rgba(74, 222, 128, 0.4); }
+            50% { opacity: 0.8; box-shadow: 0 0 0 8px rgba(74, 222, 128, 0); }
+        }
+
+        /* Main Content */
+        .main-content {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            padding: 5rem 2rem 3rem;
+            position: relative;
+        }
+
+        /* Current Caption Container */
+        .caption-container {
+            width: 100%;
+            max-width: 1400px;
+            display: flex;
+            flex-direction: column;
+            gap: 1rem;
+        }
+
+        .caption-box::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            height: 2px;
+            background: linear-gradient(90deg, transparent, var(--accent-gold), transparent);
+            opacity: 0.6;
+        }
+
+        .caption-label {
+            position: absolute;
+            top: 0.75rem;
+            left: 1.5rem;
+            font-size: 0.65rem;
+            font-family: var(--font-mono);
+            text-transform: uppercase;
+            letter-spacing: 0.15em;
+            color: var(--accent-gold-dim);
+        }
+
+        .caption-text {
+            font-size: clamp(2rem, 5vw, 3.5rem);
+            font-weight: 500;
+            line-height: 1.4;
+            letter-spacing: 0.02em;
+            min-height: 1.4em;
+            opacity: 0;
+            animation: fadeIn 0.4s ease-out forwards;
+        }
+
+        .caption-box.original .caption-label::before {
+            content: 'EN ';
+            color: var(--accent-gold);
+        }
+
+        .caption-box.translation .caption-label::before {
+            content: 'ZH ';
+            color: var(--accent-gold);
+        }
+
+        .caption-box.translation {
+            border-color: rgba(212, 175, 55, 0.1);
+        }
+
+        .caption-box.translation .caption-text {
+            font-family: 'Noto Sans SC', 'Source Han Sans SC', sans-serif;
+        }
+
+        @keyframes fadeIn {
+            from { opacity: 0; transform: translateY(10px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+
+        /* Current Caption Container */
+        .caption-container {
+            width: 100%;
+            max-width: 1400px;
+            display: flex;
+            flex-direction: column;
+            gap: 1rem;
+        }
+
+        .caption-box {
+            background: var(--bg-secondary);
+            border: 1px solid rgba(255,255,255,0.05);
+            border-radius: 8px;
+            padding: 2.5rem 4rem;
+            position: relative;
+            overflow: hidden;
+            width: 100%;
+        }
+
+        /* Decorative Elements */
+        .corner-decoration {
+            position: fixed;
+            width: 120px;
+            height: 120px;
+            pointer-events: none;
+            opacity: 0.15;
+        }
+
+        .corner-decoration.top-left {
+            top: 0;
+            left: 0;
+            border-top: 2px solid var(--accent-gold);
+            border-left: 2px solid var(--accent-gold);
+        }
+
+        .corner-decoration.top-right {
+            top: 0;
+            right: 0;
+            border-top: 2px solid var(--accent-gold);
+            border-right: 2px solid var(--accent-gold);
+        }
+
+        .corner-decoration.bottom-left {
+            bottom: 0;
+            left: 0;
+            border-bottom: 2px solid var(--accent-gold);
+            border-left: 2px solid var(--accent-gold);
+        }
+
+        .corner-decoration.bottom-right {
+            bottom: 0;
+            right: 0;
+            border-bottom: 2px solid var(--accent-gold);
+            border-right: 2px solid var(--accent-gold);
+        }
+
+        /* Loading State */
+        .loading-overlay {
+            position: fixed;
+            inset: 0;
+            background: var(--bg-primary);
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            z-index: 100;
+            transition: opacity 0.5s ease-out;
+        }
+
+        .loading-overlay.hidden {
+            opacity: 0;
+            pointer-events: none;
+        }
+
+        .loading-spinner {
+            width: 60px;
+            height: 60px;
+            border: 2px solid rgba(212, 175, 55, 0.2);
+            border-top-color: var(--accent-gold);
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+        }
+
+        .loading-text {
+            margin-top: 1.5rem;
+            font-family: var(--font-mono);
+            font-size: 0.75rem;
+            text-transform: uppercase;
+            letter-spacing: 0.2em;
+            color: var(--text-secondary);
+        }
+
+        @keyframes spin {
+            to { transform: rotate(360deg); }
+        }
+
+        /* Simulated SSE Demo Mode */
+        .demo-badge {
+            position: fixed;
+            bottom: 1rem;
+            right: 1rem;
+            background: var(--accent-gold);
+            color: var(--bg-primary);
+            padding: 0.4rem 0.8rem;
+            border-radius: 4px;
+            font-size: 0.65rem;
+            font-family: var(--font-mono);
+            text-transform: uppercase;
+            letter-spacing: 0.1em;
+            font-weight: 600;
+        }
+
+        /* Responsive */
+        @media (max-width: 768px) {
+            .caption-box {
+                padding: 1.5rem;
+            }
+            .history-item {
+                grid-template-columns: 1fr;
+                gap: 0.5rem;
+            }
+        }
+    </style>
+</head>
+<body>
+    <!-- Loading Overlay -->
+    <div class="loading-overlay" id="loadingOverlay">
+        <div class="loading-spinner"></div>
+        <div class="loading-text">Connecting to stream...</div>
+    </div>
+
+    <!-- Corner Decorations -->
+    <div class="corner-decoration top-left"></div>
+    <div class="corner-decoration top-right"></div>
+    <div class="corner-decoration bottom-left"></div>
+    <div class="corner-decoration bottom-right"></div>
+
+    <!-- Header -->
+    <header class="header">
+        <div class="logo">RCST</div>
+        <div class="status-indicator">
+            <span class="status-dot" id="statusDot"></span>
+            <span id="statusText">Connecting</span>
+        </div>
+    </header>
+
+    <!-- Main Content -->
+    <main class="main-content">
+        <div class="caption-container">
+            <!-- Original Caption -->
+            <div class="caption-box original">
+                <span class="caption-label">English</span>
+                <div class="caption-text" id="originalText"></div>
+            </div>
+
+            <!-- Translation Caption -->
+            <div class="caption-box translation">
+                <span class="caption-label">中文翻譯</span>
+                <div class="caption-text" id="translationText"></div>
+            </div>
+        </div>
+    </main>
+
+    <!-- Demo Badge -->
+    <div class="demo-badge">Demo Mode</div>
+
+    <script>
+        // Demo captions for simulation (Traditional Chinese)
+        const demoCaptions = [
+            { en: "Welcome to the International Conference on Artificial Intelligence.", zh: "歡迎參加國際人工智慧大會。" },
+            { en: "Today we will discuss the latest developments in machine learning.", zh: "今天我們將討論機器學習的最新進展。" },
+            { en: "Our keynote speaker has over 20 years of experience in the field.", zh: "我們的主題演講嘉賓在該領域擁有超過20年的經驗。" },
+            { en: "Let's begin with the fundamental concepts of neural networks.", zh: "讓我們從神經網路的基本概念開始。" },
+            { en: "The transformer architecture has revolutionized natural language processing.", zh: "Transformer架構徹底改變了自然語言處理。" },
+            { en: "Thank you for your attention. Now let's open the floor for questions.", zh: "感謝大家的聆聽。現在讓我們開放提問環節。" },
+        ];
+
+        let currentIndex = 0;
+        let sessionLog = [];
+
+        // DOM Elements
+        const originalText = document.getElementById('originalText');
+        const translationText = document.getElementById('translationText');
+        const statusDot = document.getElementById('statusDot');
+        const statusText = document.getElementById('statusText');
+        const loadingOverlay = document.getElementById('loadingOverlay');
+
+        // Log caption to markdown (sent to backend)
+        function logCaption(en, zh) {
+            const timestamp = new Date().toISOString();
+            sessionLog.push({ timestamp, en, zh });
+            // In production, this would POST to backend to append to .md file
+            console.log(`[${timestamp}] EN: ${en}\nZH: ${zh}`);
+        }
+
+        // Simulate SSE stream
+        function simulateStream() {
+            // Hide loading after 1.5s
+            setTimeout(() => {
+                loadingOverlay.classList.add('hidden');
+                statusDot.classList.add('live');
+                statusText.textContent = 'Live';
+            }, 1500);
+
+            // Start streaming captions
+            setInterval(() => {
+                const caption = demoCaptions[currentIndex];
+
+                // Update current captions with animation
+                originalText.style.animation = 'none';
+                translationText.style.animation = 'none';
+                void originalText.offsetWidth; // Trigger reflow
+                originalText.style.animation = 'fadeIn 0.4s ease-out forwards';
+                translationText.style.animation = 'fadeIn 0.4s ease-out forwards';
+
+                originalText.textContent = caption.en;
+                translationText.textContent = caption.zh;
+
+                // Log to session
+                logCaption(caption.en, caption.zh);
+
+                // Move to next caption
+                currentIndex = (currentIndex + 1) % demoCaptions.length;
+            }, 5000);
+        }
+
+        // Start demo
+        document.addEventListener('DOMContentLoaded', simulateStream);
+    </script>
+</body>
+</html>
