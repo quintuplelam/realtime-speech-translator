@@ -31,7 +31,7 @@ app.add_middleware(
 )
 
 # Mount static files
-app.mount("/ui", StaticFiles(directory="src/ui"), name="ui")
+app.mount("/ui", StaticFiles(directory="src/ui", html=True), name="ui")
 
 # Global instances
 session_logger: Optional[SessionLogger] = None
