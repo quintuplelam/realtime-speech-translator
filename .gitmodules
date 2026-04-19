@@ -1,0 +1,3 @@
+[submodule "Fun-ASR-vllm"]
+	path = Fun-ASR-vllm
+	url = https://github.com/yuekaizhang/Fun-ASR-vllm.git

@@ -6,7 +6,7 @@ import tempfile
 from typing import Optional
 
 # Add Fun-ASR-vllm to path for custom model class
-FUNASR_VLLM_PATH = "/home/quintuplelam/realtime-speech-translator/.worktrees/feature/rcst-pipeline/Fun-ASR-vllm"
+FUNASR_VLLM_PATH = "/home/quintuplelam/realtime-speech-translator/Fun-ASR-vllm"
 sys.path.insert(0, FUNASR_VLLM_PATH)
 
 
