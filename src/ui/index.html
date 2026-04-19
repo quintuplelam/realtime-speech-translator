@@ -320,7 +320,7 @@
 
                 currentMode = 'live';
                 demoBtn.classList.add('active');
-                demoBtn.textContent = 'Live: NPR';
+                demoBtn.textContent = 'Stop';
                 status.textContent = 'Live: NPR';
                 status.classList.add('live');
                 status.classList.remove('processing');
@@ -396,7 +396,7 @@
 
                 currentMode = 'live';
                 demoBtn.classList.add('active');
-                demoBtn.textContent = 'Live: Mic';
+                demoBtn.textContent = 'Stop';
                 status.textContent = 'Live: Mic';
                 status.classList.add('live');
                 status.classList.remove('processing');
@@ -422,8 +422,8 @@
 
         // Send audio chunk to backend
         async function sendAudioChunk(float32Data) {
-            if (isProcessing) return;
-            isProcessing = true;
+            // Don't skip if already processing - just send anyway
+            // Queue management is done by the backend
 
             try {
                 status.textContent = 'Processing...';
@@ -450,11 +450,13 @@
                 const result = await response.json();
                 console.log('ASR result:', result);
 
-                if (result.en) {
+                if (result.en && result.en.trim()) {
                     addCaptions(result.en, result.zh || '');
                     updateDebug(`识别: "${result.en}" → 翻译: "${result.zh || ''}"`);
                 } else if (result.error) {
                     updateDebug('错误: ' + result.error);
+                } else {
+                    updateDebug('未识别到语音内容');
                 }
 
                 status.textContent = currentMode === 'live' ?
@@ -466,8 +468,6 @@
                 console.error('Audio processing error:', error);
                 status.textContent = 'Error';
                 updateDebug('Error: ' + error.message);
-            } finally {
-                isProcessing = false;
             }
         }
 
@@ -513,7 +513,7 @@
 
         // Stop live mode
         function stopLiveMode() {
-            currentMode = 'demo';
+            currentMode = 'stopped';
 
             // Stop mic if active
             if (mediaStream) {
@@ -540,29 +540,36 @@
             }
 
             audioBuffer = [];
-            demoBtn.classList.remove('active');
-            demoBtn.textContent = 'Demo Mode';
             updateDebug('');
-            status.textContent = 'Demo Mode';
-            status.classList.remove('live', 'processing');
         }
 
         // Toggle button handler
         demoBtn.addEventListener('click', async () => {
             if (currentMode === 'live') {
                 stopLiveMode();
+                demoBtn.classList.remove('active');
+                demoBtn.textContent = 'Start Demo';
+                status.textContent = 'Stopped';
+                status.classList.remove('live', 'processing');
             } else {
                 // Ask user to choose mode
                 const useMic = confirm('使用麥克風？\n\n確定 = 麥克風模式\n取消 = 廣播演示模式');
                 if (useMic) {
                     await startMicMode();
+                    if (currentMode === 'live') {
+                        demoBtn.textContent = 'Stop';
+                    }
                 } else {
                     await startLiveMode();
+                    if (currentMode === 'live') {
+                        demoBtn.textContent = 'Stop';
+                    }
                 }
             }
         });
 
         // Default: show ready state, wait for user click
+        demoBtn.textContent = 'Start Demo';
         status.textContent = 'Ready - Click to Start';
     </script>
 </body>
