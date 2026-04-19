@@ -5,23 +5,28 @@ A low-latency, GPU-accelerated speech-to-text translation system for conferences
 ## Architecture
 
 ```
-┌─────────────────────────────────────────────────────────────────┐
-│                    Vue.js Frontend                             │
-│  - HTML5 Audio (plays NPR stream)                              │
-│  - Web Audio API (captures audio chunks)                        │
-│  - SSE connection (receives translations)                     │
-│  - Netflix-style bilingual subtitles                           │
-└─────────────────────────────────────────────────────────────────┘
-                              ▲
-                              │ SSE (translation results)
+┌─────────────────────────────────────────────────────────────┐
+│                    Frontend (src/ui/)                       │
+│         Vanilla HTML/JS - Netflix-style bilingual          │
+│         subtitles with horizontal split layout             │
+└─────────────────────────────────────────────────────────────┘
                               │
-┌─────────────────────────────────────────────────────────────────┐
-│                 FastAPI Backend (src/api/)                      │
-│  - POST /audio (receives audio chunks)                          │
-│  - GET /stream (SSE for translation results)                   │
-│  - FunASR ASR + Argos Translate                                │
-│  - Session logging to .md                                      │
-└─────────────────────────────────────────────────────────────────┘
+                              │ POST /audio (WAV chunks)
+                              ▼
+┌─────────────────────────────────────────────────────────────┐
+│                   FastAPI Backend (src/api/)                │
+│   - POST /audio: Receives WAV, returns {en, zh}           │
+│   - GET /proxy/npr: NPR stream proxy                       │
+│   - GET /health: Health check                              │
+└─────────────────────────────────────────────────────────────┘
+                              │
+         ┌───────────────────┼───────────────────┐
+         ▼                   ▼                   ▼
+┌──────────────┐  ┌──────────────┐  ┌──────────────┐
+│    FunASR    │  │    Argos     │  │   Session    │
+│   Nano 0.8B  │  │  Translate   │  │    Logger    │
+│   (ASR)      │  │  (EN→ZH)     │  │   (.md)      │
+└──────────────┘  └──────────────┘  └──────────────┘
 ```
 
 ## Tech Stack
@@ -29,38 +34,36 @@ A low-latency, GPU-accelerated speech-to-text translation system for conferences
 | Component | Technology | Notes |
 |-----------|------------|-------|
 | **ASR Engine** | FunASR nano 0.8B | Direct library call, no server |
-| **VAD** | Silero VAD | Voice activity detection |
+| **VAD** | Built into FunASR | No separate VAD needed |
 | **Translation** | Argos Translate (CTranslate2) | EN↔ZH local inference |
-| **Backend** | FastAPI (Python) | REST + SSE streaming |
-| **Frontend** | Vue 3 + Vanilla JS | Single HTML, no build required |
-| **Audio Source** | Network Broadcast Streams | NPR, BBC, etc. |
+| **Backend** | FastAPI (Python) | REST API |
+| **Frontend** | Vanilla HTML/JS | Single file, no build required |
+| **Audio Source** | Microphone or Broadcast Streams | NPR, BBC, etc. |
+
+## Two Modes
+
+| Mode | Audio Source | Description |
+|------|-------------|-------------|
+| **Demo** | NPR broadcast stream via `/proxy/npr` | System demo without microphone |
+| **Real** | Microphone via `getUserMedia` | Actual conference use |
 
 ## Key Design: Audio Separation
 
-**Problem:** Original design had audio flowing through two paths (server ffmpeg + frontend playback), causing:
-- Bandwidth waste
-- SSE connection instability
-- Complex error handling
-
-**Solution:** Clean separation of concerns
-
-```
-[NPR Stream] ──> [HTML5 Audio: frontend only] ──> [Web Audio API: capture] ──> [POST /audio] ──> [Backend processing] ──> [SSE results]
-```
+**Audio plays only in the frontend** (via HTML5 Audio element or Web Audio API destination). Backend receives **text only** via `POST /audio`.
 
 **Benefits:**
 1. Audio plays in one place only
-2. SSE only carries text (not audio bytes)
-3. Frontend controls playback + capture
-4. Backend is stateless for audio transport
+2. Frontend controls playback + capture
+3. Backend is stateless for audio transport
 
 ## API Endpoints
 
 | Method | Path | Description |
 |--------|------|-------------|
 | `GET` | `/health` | Health check |
-| `POST` | `/audio` | Receive audio chunk, return transcription + translation |
-| `GET` | `/stream` | SSE stream for receiving translations (demo mode) |
+| `POST` | `/audio` | Receive WAV audio chunk, return transcription + translation |
+| `GET` | `/proxy/npr` | Proxy for WNYC FM broadcast stream |
+| `POST` | `/session/start` | Start a new session logger |
 
 ## Session Logs
 
@@ -81,16 +84,18 @@ Sessions are saved to `sessions/{session_id}/session.md`:
 realtime-speech-translator/
 ├── src/
 │   ├── api/
-│   │   ├── main.py          # FastAPI app + endpoints
-│   │   ├── translator.py    # Argos Translate wrapper
-│   │   ├── logger.py        # Session markdown logger
-│   │   └── pipeline.py      # Audio processing pipeline
+│   │   ├── main.py           # FastAPI app entry point
+│   │   ├── funasr_client.py  # FunASR ASR client wrapper
+│   │   ├── translator.py      # Argos Translate wrapper
+│   │   ├── audio_stream.py    # Audio stream connector (ffmpeg)
+│   │   └── logger.py          # Session markdown logger
 │   └── ui/
-│       ├── index.html       # Production frontend
-│       └── demo.html        # Demo mode frontend
-├── tests/
-├── docs/
-├── sessions/                # Generated session logs
+│       ├── index.html         # Production frontend
+│       └── demo.html          # Demo mode frontend
+├── Fun-ASR-vllm/              # FunASR model submodule
+├── tests/                     # Test suite
+├── docs/                      # Design specs and implementation plans
+├── sessions/                  # Generated session logs
 └── requirements.txt
 ```
 
@@ -105,6 +110,9 @@ source venv/bin/activate
 
 # Install Python deps
 pip install -r requirements.txt
+
+# Initialize git submodule
+git submodule update --init --recursive
 ```
 
 ### 2. Run Backend
@@ -119,10 +127,10 @@ uvicorn src.api.main:app --host 0.0.0.0 --port 8000 --reload
 # In browser
 open http://localhost:8000/ui/index.html
 
-# Click "Live: NPR" button to start
+# Click "Start Demo" button to select mode
 ```
 
-## Testing with Broadcast Streams
+## Testing Broadcast Streams
 
 ### NPR News (English)
 

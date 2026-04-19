@@ -81,7 +81,7 @@ Strong success criteria let you loop independently. Weak criteria ("make it work
 
 ### Architecture
 ```
-[Microphone/Broadcast] → Audio Chunking (3s) → FunASR (ASR) → Argos Translate (EN→ZH) → [Web UI]
+[Microphone/Broadcast] → Audio Chunking (6s) → FunASR (ASR) → Argos Translate (EN→ZH) → [Web UI]
 ```
 
 ### Two Modes
