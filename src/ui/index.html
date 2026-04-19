@@ -338,17 +338,18 @@
         // Start microphone mode
         async function startMicMode() {
             try {
-                // Request microphone
-                mediaStream = await navigator.mediaDevices.getUserMedia({
+                // Request microphone - flexible constraints
+                const constraints = {
                     audio: {
                         echoCancellation: true,
-                        noiseSuppression: true,
-                        sampleRate: 16000
+                        noiseSuppression: true
                     }
-                });
+                };
 
-                // Create audio context
-                audioContext = new AudioContext({ sampleRate: SAMPLE_RATE });
+                mediaStream = await navigator.mediaDevices.getUserMedia(constraints);
+
+                // Create audio context - let it use default sample rate
+                audioContext = new AudioContext();
 
                 // Create script processor for mic capture
                 processor = audioContext.createScriptProcessor(4096, 1, 1);
@@ -403,7 +404,15 @@
 
             } catch (error) {
                 console.error('Mic mode failed:', error);
-                updateDebug('麦克风访问失败: ' + error.message);
+                let errorMsg = '麦克风访问失败: ' + error.message;
+                if (error.name === 'NotFoundError' || error.name === 'DevicesNotFoundError') {
+                    errorMsg = '未找到麦克风设备，请检查是否连接了麦克风';
+                } else if (error.name === 'NotAllowedError' || error.name === 'PermissionDeniedError') {
+                    errorMsg = '麦克风权限被拒绝，请在浏览器中允许麦克风访问';
+                } else if (error.name === 'OverconstrainedError') {
+                    errorMsg = '麦克风不支持请求的音频配置';
+                }
+                updateDebug(errorMsg);
                 currentMode = 'demo';
                 demoBtn.classList.remove('active');
                 demoBtn.textContent = 'Demo Mode';
