@@ -155,7 +155,6 @@ async def process_audio(request: Request):
             return JSONResponse(result)
 
         # Get transcription (FunASR is synchronous, run in thread to not block)
-        import asyncio
         text = await asyncio.to_thread(funasr.transcribe, audio_data)
 
         if text:

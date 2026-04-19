@@ -216,8 +216,8 @@
         // Start live NPR mode with audio capture using Web Audio API
         async function startLiveMode() {
             try {
-                // Create audio context
-                audioContext = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: SAMPLE_RATE });
+                // Create audio context - use default sample rate to match stream
+                audioContext = new (window.AudioContext || window.webkitAudioContext)();
 
                 // Create script processor for audio capture
                 processor = audioContext.createScriptProcessor(4096, 1, 1);
@@ -243,7 +243,7 @@
                         updateDebug('检测到音频输入! 音量: ' + (avgLevel * 100).toFixed(1) + '%');
                     }
 
-                    // Convert float32 to int16 PCM and add to buffer
+                    // Add samples to buffer
                     for (let i = 0; i < inputData.length; i++) {
                         audioBuffer.push(inputData[i]);
                     }
@@ -267,6 +267,7 @@
                 hiddenAudio = document.getElementById('hiddenAudio');
                 hiddenAudio.src = NPR_STREAM_URL;
                 hiddenAudio.loop = true;
+                hiddenAudio.crossOrigin = 'anonymous';
 
                 // Add error handling
                 hiddenAudio.onerror = (e) => {
@@ -428,10 +429,11 @@
                 status.textContent = 'Processing...';
                 status.classList.add('processing');
 
-                // Convert float32 to WAV bytes
-                const wavBytes = float32ToWav(float32Data, SAMPLE_RATE);
+                // Use actual sample rate from audio context for WAV header
+                const actualSampleRate = audioContext ? audioContext.sampleRate : SAMPLE_RATE;
+                const wavBytes = float32ToWav(float32Data, actualSampleRate);
 
-                console.log('Sending audio chunk:', float32Data.length, 'samples');
+                console.log('Sending audio chunk:', float32Data.length, 'samples, rate:', actualSampleRate);
 
                 const response = await fetch('/audio', {
                     method: 'POST',
