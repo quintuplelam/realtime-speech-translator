@@ -66,28 +66,27 @@ Strong success criteria let you loop independently. Weak criteria ("make it work
 
 ---
 
-## Project-Specific: WhisperX Speech Translation
+## Project-Specific: FunASR Speech Translation
 
 ### Overview
-**Realtime Conference Speech Translator (RCST)** — A low-latency, GPU-accelerated speech-to-text translation system for conferences, providing real-time English ↔ Chinese bidirectional translation with bilingual subtitle display.
+**Realtime Conference Speech Translator (RCST)** — A low-latency speech-to-text translation system for conferences, providing real-time English ↔ Chinese bidirectional translation with bilingual subtitle display.
 
 ### Core Technology
-- **ASR**: WhisperX (https://github.com/m-bain/whisperX)
-  - Word-level timestamps
-  - Speaker diarization
-  - VAD integration
-  - Better multilingual support
-- **Translation**: NLLB-200-distilled (Facebook/Meta)
-- **UI**: Web-based bilingual subtitle display
+- **ASR**: FunASR nano 0.8B (https://github.com/modelscope/FunASR)
+  - Direct library call (no separate server)
+  - Built-in VAD
+  - Streaming transcription
+- **Translation**: Argos Translate (EN↔ZH)
+- **UI**: Web-based bilingual subtitle display (horizontal split, auto-scroll)
 
 ### Architecture
 ```
-[Microphone] → Audio Chunking (500ms, 50% overlap) → WhisperX (ASR) → NLLB (Translation) → [Web UI]
+[Microphone/Broadcast] → Audio Chunking (3s) → FunASR (ASR) → Argos Translate (EN→ZH) → [Web UI]
 ```
 
-### Target Latency
-- Typical: ~1.6s
-- Ceiling: < 4s end-to-end
+### Two Modes
+- **Demo Mode**: WNYC FM broadcast stream capture
+- **Real Mode**: Microphone input capture
 
 ### Key Conventions
 - **All code in English** — variable names, function names, comments, commit messages

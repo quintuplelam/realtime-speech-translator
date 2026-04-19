@@ -19,7 +19,7 @@ A low-latency, GPU-accelerated speech-to-text translation system for conferences
 │                 FastAPI Backend (src/api/)                      │
 │  - POST /audio (receives audio chunks)                          │
 │  - GET /stream (SSE for translation results)                   │
-│  - Voxtral ASR + Argos Translate                               │
+│  - FunASR ASR + Argos Translate                                │
 │  - Session logging to .md                                      │
 └─────────────────────────────────────────────────────────────────┘
 ```
@@ -28,7 +28,7 @@ A low-latency, GPU-accelerated speech-to-text translation system for conferences
 
 | Component | Technology | Notes |
 |-----------|------------|-------|
-| **ASR Engine** | Voxtral Mini 4B Realtime (Rust) | Q4 GGUF ~2.5GB, RTA ~0.4 |
+| **ASR Engine** | FunASR nano 0.8B | Direct library call, no server |
 | **VAD** | Silero VAD | Voice activity detection |
 | **Translation** | Argos Translate (CTranslate2) | EN↔ZH local inference |
 | **Backend** | FastAPI (Python) | REST + SSE streaming |
@@ -82,14 +82,12 @@ realtime-speech-translator/
 ├── src/
 │   ├── api/
 │   │   ├── main.py          # FastAPI app + endpoints
-│   │   ├── asr.py           # Voxtral subprocess wrapper
 │   │   ├── translator.py    # Argos Translate wrapper
 │   │   ├── logger.py        # Session markdown logger
-│   │   ├── vad.py          # Silero VAD wrapper
 │   │   └── pipeline.py      # Audio processing pipeline
 │   └── ui/
 │       ├── index.html       # Production frontend
-│       └── demo.html       # Demo mode frontend
+│       └── demo.html        # Demo mode frontend
 ├── tests/
 ├── docs/
 ├── sessions/                # Generated session logs
@@ -107,9 +105,6 @@ source venv/bin/activate
 
 # Install Python deps
 pip install -r requirements.txt
-
-# Install Voxtral CLI (Rust)
-cargo install voxtral --features wgpu,cli,hub
 ```
 
 ### 2. Run Backend
