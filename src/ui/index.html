@@ -34,30 +34,23 @@
             font-size: 1.25rem;
             color: var(--accent-gold);
         }
-        .header-right {
-            display: flex;
-            align-items: center;
-            gap: 1rem;
-        }
+        .header-right { display: flex; align-items: center; gap: 1rem; }
         .status { font-size: 0.75rem; color: #666; }
         .status.live { color: #4ade80; }
-        .status.processing { color: #f59e0b; }
-        .demo-btn {
+        .status.error { color: #f87171; }
+        .start-btn {
             background: transparent;
             border: 1px solid var(--accent-gold);
             color: var(--accent-gold);
-            padding: 0.5rem 1rem;
+            padding: 0.5rem 1.5rem;
             border-radius: 4px;
-            font-size: 0.75rem;
+            font-size: 0.875rem;
             font-family: var(--font-body);
-            text-transform: uppercase;
-            letter-spacing: 0.1em;
             cursor: pointer;
             transition: all 0.3s ease;
         }
-        .demo-btn:hover { background: rgba(212, 175, 55, 0.1); }
-        .demo-btn.active { background: var(--accent-gold); color: var(--bg-primary); }
-        .demo-btn.loading { opacity: 0.5; cursor: not-allowed; }
+        .start-btn:hover { background: rgba(212, 175, 55, 0.1); }
+        .start-btn.active { background: var(--accent-gold); color: var(--bg-primary); }
         .caption-container {
             flex: 1;
             display: flex;
@@ -107,9 +100,6 @@
             from { opacity: 0; transform: translateY(-10px); }
             to { opacity: 1; transform: translateY(0); }
         }
-        /* Hidden audio elements */
-        #audioPlayer { display: none; }
-        #hiddenAudio { display: none; }
         .debug-info {
             position: fixed;
             bottom: 1rem;
@@ -118,6 +108,32 @@
             color: #444;
             font-family: monospace;
         }
+        .mode-select {
+            display: none;
+            position: fixed;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            background: var(--bg-secondary);
+            padding: 2rem;
+            border-radius: 8px;
+            border: 1px solid var(--accent-gold);
+            z-index: 100;
+        }
+        .mode-select h3 { color: var(--accent-gold); margin-bottom: 1rem; }
+        .mode-select button {
+            display: block;
+            width: 100%;
+            padding: 0.75rem 1rem;
+            margin-bottom: 0.5rem;
+            background: transparent;
+            border: 1px solid var(--accent-gold);
+            color: var(--accent-gold);
+            cursor: pointer;
+            border-radius: 4px;
+        }
+        .mode-select button:hover { background: rgba(212, 175, 55, 0.2); }
+        .hidden-audio { display: none; }
     </style>
 </head>
 <body>
@@ -125,14 +141,19 @@
         <div class="logo">RCST</div>
         <div class="header-right">
             <div class="status" id="status">Ready</div>
-            <button class="demo-btn" id="demoBtn">Demo Mode</button>
+            <button class="start-btn" id="startBtn">Start Demo</button>
         </div>
     </header>
 
-    <!-- Hidden audio player for NPR stream -->
-    <audio id="audioPlayer" controls></audio>
-    <!-- Hidden audio for audio context -->
-    <audio id="hiddenAudio" crossorigin="anonymous"></audio>
+    <!-- Hidden audio for playback -->
+    <audio id="playbackAudio" class="hidden-audio" controls></audio>
+
+    <!-- Mode selection popup -->
+    <div class="mode-select" id="modeSelect">
+        <h3>選擇模式</h3>
+        <button id="micModeBtn">🎤 麥克風模式</button>
+        <button id="streamModeBtn">📻 廣播模式 (NPR)</button>
+    </div>
 
     <main class="caption-container">
         <div class="caption-box">
@@ -148,26 +169,25 @@
     <div class="debug-info" id="debugInfo"></div>
 
     <script>
-        const NPR_STREAM_URL = '/proxy/npr';
+        // DOM elements
+        const startBtn = document.getElementById('startBtn');
+        const status = document.getElementById('status');
+        const modeSelect = document.getElementById('modeSelect');
+        const micModeBtn = document.getElementById('micModeBtn');
+        const streamModeBtn = document.getElementById('streamModeBtn');
+        const playbackAudio = document.getElementById('playbackAudio');
         const enHistory = document.getElementById('enHistory');
         const zhHistory = document.getElementById('zhHistory');
-        const status = document.getElementById('status');
-        const demoBtn = document.getElementById('demoBtn');
-        const audioPlayer = document.getElementById('audioPlayer');
-        let hiddenAudio = document.getElementById('hiddenAudio');
         const debugInfo = document.getElementById('debugInfo');
 
-        let eventSource = null;
-        let currentMode = 'demo'; // 'demo' or 'live'
+        // State
         let audioContext = null;
         let processor = null;
-        let sourceNode = null;
         let mediaStream = null;
-        let isProcessing = false;
         let audioBuffer = [];
-
+        let isRunning = false;
         const SAMPLE_RATE = 16000;
-        const CHUNK_DURATION_MS = 3000;
+        const CHUNK_DURATION_MS = 6000;  // 6 seconds for complete sentences
         const CHUNK_SIZE = Math.floor(SAMPLE_RATE * CHUNK_DURATION_MS / 1000);
 
         function updateDebug(msg) {
@@ -179,7 +199,6 @@
             entry.className = 'caption-entry fade-in';
             entry.textContent = text;
             historyEl.prepend(entry);
-            historyEl.scrollTop = 0;
         }
 
         function addCaptions(en, zh) {
@@ -187,311 +206,146 @@
             if (zh) prependCaption(zhHistory, zh);
         }
 
-        // Connect to demo SSE
-        function connectDemoSSE() {
-            if (eventSource) {
-                eventSource.close();
-            }
-
-            status.textContent = 'Demo Mode';
-            demoBtn.classList.add('loading');
-
-            eventSource = new EventSource('/stream');
-
-            eventSource.addEventListener('caption', (event) => {
-                const data = JSON.parse(event.data);
-                addCaptions(data.en, data.zh);
-                status.textContent = 'Demo Mode';
-                status.classList.add('live');
-                demoBtn.classList.remove('loading');
-            });
-
-            eventSource.onerror = () => {
-                status.textContent = 'Reconnecting...';
-                demoBtn.classList.add('loading');
-                setTimeout(connectDemoSSE, 3000);
-            };
+        function showModeSelect() {
+            modeSelect.style.display = 'block';
         }
 
-        // Start live NPR mode with audio capture using Web Audio API
-        async function startLiveMode() {
-            try {
-                // Create audio context - use default sample rate to match stream
-                audioContext = new (window.AudioContext || window.webkitAudioContext)();
-
-                // Create script processor for audio capture
-                processor = audioContext.createScriptProcessor(4096, 1, 1);
-
-                audioBuffer = [];
-                let audioStartTime = null;
-
-                processor.onaudioprocess = (e) => {
-                    if (currentMode !== 'live' || isProcessing) return;
-
-                    const inputData = e.inputBuffer.getChannelData(0);
-
-                    // Calculate audio level for debugging
-                    let sum = 0;
-                    for (let i = 0; i < inputData.length; i++) {
-                        sum += Math.abs(inputData[i]);
-                    }
-                    const avgLevel = sum / inputData.length;
-
-                    if (!audioStartTime && avgLevel > 0.001) {
-                        audioStartTime = Date.now();
-                        console.log('Audio captured! Level:', avgLevel.toFixed(4));
-                        updateDebug('检测到音频输入! 音量: ' + (avgLevel * 100).toFixed(1) + '%');
-                    }
-
-                    // Add samples to buffer
-                    for (let i = 0; i < inputData.length; i++) {
-                        audioBuffer.push(inputData[i]);
-                    }
-
-                    // When we have enough samples, send to backend
-                    if (audioBuffer.length >= CHUNK_SIZE) {
-                        const chunk = audioBuffer.slice(0, CHUNK_SIZE);
-                        audioBuffer = audioBuffer.slice(CHUNK_SIZE);
-
-                        if (avgLevel > 0.001) {
-                            updateDebug('发送音频块... 音量: ' + (avgLevel * 100).toFixed(1) + '%');
-                        }
-                        sendAudioChunk(chunk);
-                    }
-                };
-
-                // Connect processor to destination for monitoring
-                processor.connect(audioContext.destination);
-
-                // Create audio element for NPR stream
-                hiddenAudio = document.getElementById('hiddenAudio');
-                hiddenAudio.src = NPR_STREAM_URL;
-                hiddenAudio.loop = true;
-                hiddenAudio.crossOrigin = 'anonymous';
-
-                // Add error handling
-                hiddenAudio.onerror = (e) => {
-                    console.error('Audio element error:', e);
-                    updateDebug('音频加载失败: ' + JSON.stringify(e));
-                };
-
-                // Wait for audio to be loadable
-                await new Promise((resolve, reject) => {
-                    hiddenAudio.oncanplaythrough = () => {
-                        console.log('Audio can play through');
-                        updateDebug('音频已加载，可以播放');
-                        resolve();
-                    };
-                    hiddenAudio.onerror = (e) => {
-                        console.error('Audio load error:', e);
-                        reject(new Error('音频加载失败'));
-                    };
-                    hiddenAudio.load();
-                });
-
-                // Create media element source and connect to processor
-                const mediaSource = audioContext.createMediaElementSource(hiddenAudio);
-                mediaSource.connect(processor);
-
-                // Start playing NPR stream
-                try {
-                    await hiddenAudio.play();
-                    console.log('NPR audio started playing');
-
-                    // Resume audio context (required for autoplay policy)
-                    if (audioContext.state === 'suspended') {
-                        await audioContext.resume();
-                        console.log('AudioContext resumed');
-                    }
-
-                    setTimeout(() => {
-                        if (hiddenAudio.paused) {
-                            updateDebug('警告: 音频可能没有播放(自动播放策略限制)');
-                        } else {
-                            updateDebug('音频正在播放，检测中...');
-                        }
-                    }, 1000);
-
-                } catch (playError) {
-                    console.error('Failed to play audio:', playError);
-                    updateDebug('播放错误: ' + playError.message);
-                    throw playError;
-                }
-
-                currentMode = 'live';
-                demoBtn.classList.add('active');
-                demoBtn.textContent = 'Stop';
-                status.textContent = 'Live: NPR';
-                status.classList.add('live');
-                status.classList.remove('processing');
-                demoBtn.classList.remove('loading');
-
-            } catch (error) {
-                console.error('Failed to start live mode:', error);
-                status.textContent = 'Error: ' + error.message;
-                demoBtn.classList.remove('loading');
-                currentMode = 'demo';
-                demoBtn.classList.remove('active');
-                demoBtn.textContent = 'Start Demo';
-            }
+        function hideModeSelect() {
+            modeSelect.style.display = 'none';
         }
 
-        // Start microphone mode
+        function stopCapture() {
+            isRunning = false;
+
+            if (mediaStream) {
+                mediaStream.getTracks().forEach(track => track.stop());
+                mediaStream = null;
+            }
+
+            if (processor) {
+                processor.disconnect();
+                processor = null;
+            }
+
+            if (audioContext) {
+                audioContext.close();
+                audioContext = null;
+            }
+
+            audioBuffer = [];
+            startBtn.classList.remove('active');
+            startBtn.textContent = 'Start Demo';
+            status.textContent = 'Stopped';
+            status.classList.remove('live');
+        }
+
         async function startMicMode() {
             try {
-                // Request microphone - flexible constraints
-                const constraints = {
-                    audio: {
-                        echoCancellation: true,
-                        noiseSuppression: true
-                    }
-                };
-
-                mediaStream = await navigator.mediaDevices.getUserMedia(constraints);
-
-                // Create audio context - let it use default sample rate
+                mediaStream = await navigator.mediaDevices.getUserMedia({ audio: true });
                 audioContext = new AudioContext();
-
-                // Create script processor for mic capture
                 processor = audioContext.createScriptProcessor(4096, 1, 1);
-
                 audioBuffer = [];
 
                 processor.onaudioprocess = (e) => {
-                    if (currentMode !== 'live') return;
-
+                    if (!isRunning) return;
                     const inputData = e.inputBuffer.getChannelData(0);
-
-                    // Calculate audio level
-                    let sum = 0;
-                    for (let i = 0; i < inputData.length; i++) {
-                        sum += Math.abs(inputData[i]);
-                    }
-                    const avgLevel = sum / inputData.length;
-
-                    if (avgLevel > 0.001) {
-                        updateDebug('麦克风输入! 音量: ' + (avgLevel * 100).toFixed(1) + '%');
-                    }
-
                     for (let i = 0; i < inputData.length; i++) {
                         audioBuffer.push(inputData[i]);
                     }
-
                     if (audioBuffer.length >= CHUNK_SIZE) {
-                        const chunk = audioBuffer.slice(0, CHUNK_SIZE);
-                        audioBuffer = audioBuffer.slice(CHUNK_SIZE);
-                        sendAudioChunk(chunk);
+                        sendChunk();
                     }
                 };
 
-                // Connect mic to processor
-                const micSource = audioContext.createMediaStreamSource(mediaStream);
-                micSource.connect(processor);
                 processor.connect(audioContext.destination);
-
-                // Resume audio context (required for autoplay policy)
-                if (audioContext.state === 'suspended') {
-                    await audioContext.resume();
-                }
-
-                currentMode = 'live';
-                demoBtn.classList.add('active');
-                demoBtn.textContent = 'Stop';
+                isRunning = true;
                 status.textContent = 'Live: Mic';
                 status.classList.add('live');
-                status.classList.remove('processing');
-                demoBtn.classList.remove('loading');
-                updateDebug('麦克风已连接');
-
+                updateDebug('麥克風已連接');
             } catch (error) {
-                console.error('Mic mode failed:', error);
-                let errorMsg = '麦克风访问失败: ' + error.message;
-                if (error.name === 'NotFoundError' || error.name === 'DevicesNotFoundError') {
-                    errorMsg = '未找到麦克风设备，请检查是否连接了麦克风';
-                } else if (error.name === 'NotAllowedError' || error.name === 'PermissionDeniedError') {
-                    errorMsg = '麦克风权限被拒绝，请在浏览器中允许麦克风访问';
-                } else if (error.name === 'OverconstrainedError') {
-                    errorMsg = '麦克风不支持请求的音频配置';
-                }
-                updateDebug(errorMsg);
-                currentMode = 'demo';
-                demoBtn.classList.remove('active');
-                demoBtn.textContent = 'Start Demo';
+                console.error('Mic error:', error);
+                updateDebug('麥克風錯誤: ' + error.message);
+                stopCapture();
             }
         }
 
-        // Send audio chunk to backend
-        async function sendAudioChunk(float32Data) {
-            // Don't skip if already processing - just send anyway
-            // Queue management is done by the backend
-
+        async function startStreamMode() {
+            const NPR_URL = '/proxy/npr';
             try {
-                status.textContent = 'Processing...';
-                status.classList.add('processing');
+                audioContext = new AudioContext();
+                processor = audioContext.createScriptProcessor(4096, 1, 1);
+                audioBuffer = [];
 
-                // Use actual sample rate from audio context for WAV header
-                const actualSampleRate = audioContext ? audioContext.sampleRate : SAMPLE_RATE;
-                const wavBytes = float32ToWav(float32Data, actualSampleRate);
+                // Create audio element for stream
+                const audioEl = document.createElement('audio');
+                audioEl.src = NPR_URL;
+                audioEl.crossOrigin = 'anonymous';
+                audioEl.loop = true;
 
-                console.log('Sending audio chunk:', float32Data.length, 'samples, rate:', actualSampleRate);
-
-                const response = await fetch('/audio', {
-                    method: 'POST',
-                    body: wavBytes,
-                    headers: {
-                        'Content-Type': 'audio/wav'
-                    }
+                await new Promise((resolve, reject) => {
+                    audioEl.oncanplaythrough = resolve;
+                    audioEl.onerror = reject;
+                    audioEl.load();
                 });
 
-                if (!response.ok) {
-                    throw new Error('Failed to process audio: ' + response.status);
-                }
+                const source = audioContext.createMediaElementSource(audioEl);
+                source.connect(processor);
+                processor.connect(audioContext.destination);
+                await audioEl.play();
 
-                const result = await response.json();
-                console.log('ASR result:', result);
+                processor.onaudioprocess = (e) => {
+                    if (!isRunning) return;
+                    const inputData = e.inputBuffer.getChannelData(0);
+                    for (let i = 0; i < inputData.length; i++) {
+                        audioBuffer.push(inputData[i]);
+                    }
+                    if (audioBuffer.length >= CHUNK_SIZE) {
+                        sendChunk();
+                    }
+                };
 
-                if (result.en && result.en.trim()) {
-                    addCaptions(result.en, result.zh || '');
-                    updateDebug(`识别: "${result.en}" → 翻译: "${result.zh || ''}"`);
-                } else if (result.error) {
-                    updateDebug('错误: ' + result.error);
-                } else {
-                    updateDebug('未识别到语音内容');
-                }
-
-                status.textContent = currentMode === 'live' ?
-                    (mediaStream ? 'Live: Mic' : 'Live: NPR') : 'Demo Mode';
-                status.classList.remove('processing');
+                isRunning = true;
+                status.textContent = 'Live: NPR';
                 status.classList.add('live');
-
+                updateDebug('NPR 廣播已開始');
             } catch (error) {
-                console.error('Audio processing error:', error);
-                status.textContent = 'Error';
-                updateDebug('Error: ' + error.message);
+                console.error('Stream error:', error);
+                updateDebug('廣播錯誤: ' + error.message);
+                stopCapture();
             }
         }
 
-        // Convert float32 PCM to WAV format
         function float32ToWav(float32Data, sampleRate) {
             const numSamples = float32Data.length;
             const byteRate = sampleRate * 2;
-            const blockAlign = 2;
-
             const buffer = new ArrayBuffer(44 + numSamples * 2);
             const view = new DataView(buffer);
 
-            writeString(view, 0, 'RIFF');
+            // RIFF header
+            view.setUint8(0, 'R'.charCodeAt(0));
+            view.setUint8(1, 'I'.charCodeAt(0));
+            view.setUint8(2, 'F'.charCodeAt(0));
+            view.setUint8(3, 'F'.charCodeAt(0));
             view.setUint32(4, 36 + numSamples * 2, true);
-            writeString(view, 8, 'WAVE');
-            writeString(view, 12, 'fmt ');
+            view.setUint8(8, 'W'.charCodeAt(0));
+            view.setUint8(9, 'A'.charCodeAt(0));
+            view.setUint8(10, 'V'.charCodeAt(0));
+            view.setUint8(11, 'E'.charCodeAt(0));
+            view.setUint8(12, 'f'.charCodeAt(0));
+            view.setUint8(13, 'm'.charCodeAt(0));
+            view.setUint8(14, 't'.charCodeAt(0));
+            view.setUint8(15, ' '.charCodeAt(0));
             view.setUint32(16, 16, true);
             view.setUint16(20, 1, true);
             view.setUint16(22, 1, true);
             view.setUint32(24, sampleRate, true);
             view.setUint32(28, byteRate, true);
-            view.setUint16(32, blockAlign, true);
+            view.setUint16(32, 2, true);
             view.setUint16(34, 16, true);
-            writeString(view, 36, 'data');
+            view.setUint8(36, 'd'.charCodeAt(0));
+            view.setUint8(37, 'a'.charCodeAt(0));
+            view.setUint8(38, 't'.charCodeAt(0));
+            view.setUint8(39, 'a'.charCodeAt(0));
             view.setUint32(40, numSamples * 2, true);
 
             let offset = 44;
@@ -501,70 +355,71 @@
                 view.setInt16(offset, intSample, true);
                 offset += 2;
             }
-
             return buffer;
         }
 
-        function writeString(view, offset, string) {
-            for (let i = 0; i < string.length; i++) {
-                view.setUint8(offset + i, string.charCodeAt(i));
-            }
-        }
+        function sendChunk() {
+            const chunk = audioBuffer.slice(0, CHUNK_SIZE);
+            audioBuffer = audioBuffer.slice(CHUNK_SIZE);
 
-        // Stop live mode
-        function stopLiveMode() {
-            currentMode = 'stopped';
+            const actualRate = audioContext ? audioContext.sampleRate : SAMPLE_RATE;
+            const wavBytes = float32ToWav(chunk, actualRate);
 
-            // Stop mic if active
-            if (mediaStream) {
-                mediaStream.getTracks().forEach(track => track.stop());
-                mediaStream = null;
-            }
+            status.textContent = 'Processing...';
 
-            // Stop audio processing
-            if (processor) {
-                processor.disconnect();
-                processor = null;
-            }
-            if (audioContext) {
-                audioContext.close();
-                audioContext = null;
-            }
+            fetch('/audio', {
+                method: 'POST',
+                body: wavBytes,
+                headers: { 'Content-Type': 'audio/wav' }
+            })
+            .then(r => r.json())
+            .then(result => {
+                if (result.en && result.en.trim()) {
+                    addCaptions(result.en, result.zh || '');
+                    updateDebug(`"${result.en}" → "${result.zh || ''}"`);
 
-            // Stop NPR audio if playing
-            if (hiddenAudio) {
-                hiddenAudio.pause();
-                if (hiddenAudio.src !== '') {
-                    hiddenAudio.src = '';
+                    // Play back audio for user to hear
+                    const blob = new Blob([wavBytes], { type: 'audio/wav' });
+                    const url = URL.createObjectURL(blob);
+                    playbackAudio.src = url;
+                    playbackAudio.play().catch(() => {});
+                } else if (result.error) {
+                    updateDebug('Error: ' + result.error);
+                } else {
+                    updateDebug('未識別到語音');
                 }
-            }
-
-            audioBuffer = [];
-            updateDebug('');
+                status.textContent = isRunning ? status.textContent : 'Stopped';
+            })
+            .catch(err => {
+                console.error('Audio error:', err);
+                updateDebug('Error: ' + err.message);
+            });
         }
 
-        // Toggle button handler
-        demoBtn.addEventListener('click', async () => {
-            if (currentMode === 'live') {
-                stopLiveMode();
+        // Event listeners
+        startBtn.addEventListener('click', () => {
+            if (isRunning) {
+                stopCapture();
             } else {
-                // Ask user to choose mode
-                const useMic = confirm('使用麥克風？\n\n確定 = 麥克風模式\n取消 = 廣播演示模式');
-                try {
-                    if (useMic) {
-                        await startMicMode();
-                    } else {
-                        await startLiveMode();
-                    }
-                } catch (e) {
-                    console.error('Mode start failed:', e);
-                }
+                showModeSelect();
             }
         });
 
-        // Default: show ready state, wait for user click
-        demoBtn.textContent = 'Start Demo';
-        status.textContent = 'Ready - Click to Start';
+        micModeBtn.addEventListener('click', async () => {
+            hideModeSelect();
+            startBtn.classList.add('active');
+            startBtn.textContent = 'Stop';
+            await startMicMode();
+        });
+
+        streamModeBtn.addEventListener('click', async () => {
+            hideModeSelect();
+            startBtn.classList.add('active');
+            startBtn.textContent = 'Stop';
+            await startStreamMode();
+        });
+
+        status.textContent = 'Ready - Click Start';
     </script>
 </body>
 </html>

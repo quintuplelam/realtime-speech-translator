@@ -8,16 +8,14 @@ Uses FunASR for speech-to-text and Argos Translate for EN↔ZH translation.
 from fastapi import FastAPI, Request
 from fastapi.responses import StreamingResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
-from sse_starlette.sse import EventSourceResponse
 from fastapi.middleware.cors import CORSMiddleware
 import asyncio
-import json
 from datetime import datetime
 from typing import Optional
-import httpx
 
 from src.api.logger import SessionLogger
 from src.api.funasr_client import FunasrClient
+import httpx
 
 app = FastAPI(title="RCST API")
 
@@ -32,6 +30,32 @@ app.add_middleware(
 
 # Mount static files
 app.mount("/ui", StaticFiles(directory="src/ui", html=True), name="ui")
+
+
+@app.get("/proxy/npr")
+async def proxy_npr():
+    """Proxy WNYC FM stream for audio capture."""
+    NPR_URL = "https://fm939.wnyc.org/wnycfm"
+
+    async def stream_generator():
+        try:
+            async with httpx.AsyncClient(timeout=60.0, follow_redirects=True) as client:
+                async with client.stream("GET", NPR_URL) as response:
+                    async for chunk in response.aiter_bytes(chunk_size=8192):
+                        yield chunk
+        except Exception as e:
+            print(f"NPR proxy error: {e}")
+
+    return StreamingResponse(
+        stream_generator(),
+        media_type="audio/mpeg",
+        headers={
+            "Access-Control-Allow-Origin": "*",
+            "Access-Control-Allow-Methods": "GET",
+            "Access-Control-Allow-Headers": "*",
+            "Cache-Control": "no-cache",
+        }
+    )
 
 # Global instances
 session_logger: Optional[SessionLogger] = None
@@ -67,76 +91,9 @@ async def health():
     })
 
 
-@app.get("/proxy/npr")
-async def proxy_npr():
-    """Proxy WNYC FM stream to avoid CORS issues with captureStream().
-
-    The frontend can use this endpoint as an audio source and capture it
-    via Web Audio API without CORS restrictions.
-    """
-    # WNYC FM - New York public radio (news & talk)
-    NPR_URL = "https://fm939.wnyc.org/wnycfm"
-
-    async def stream_generator():
-        try:
-            async with httpx.AsyncClient(timeout=60.0, follow_redirects=True) as client:
-                async with client.stream("GET", NPR_URL) as response:
-                    async for chunk in response.aiter_bytes(chunk_size=8192):
-                        yield chunk
-        except Exception as e:
-            print(f"NPR proxy error: {e}")
-
-    return StreamingResponse(
-        stream_generator(),
-        media_type="audio/mpeg",
-        headers={
-            "Access-Control-Allow-Origin": "*",
-            "Access-Control-Allow-Methods": "GET",
-            "Access-Control-Allow-Headers": "*",
-            "Cache-Control": "no-cache",
-        }
-    )
-
-
-@app.get("/stream")
-async def stream(request: Request):
-    """SSE endpoint for real-time caption stream (demo mode).
-
-    This is a fallback/demo mode that returns simulated captions.
-    For production, use /audio endpoint with live audio capture.
-    """
-    async def event_generator():
-        demo_captions = [
-            ("Welcome to the International Conference.", "歡迎參加國際會議。"),
-            ("Today we discuss machine learning advances.", "今天我們討論機器學習進展。"),
-            ("Thank you for your attention.", "感謝大家的聆聽。"),
-        ]
-
-        for en, zh in demo_captions:
-            timestamp = datetime.now().isoformat()
-            data = {"en": en, "zh": zh, "timestamp": timestamp}
-
-            if session_logger:
-                session_logger.log(en, zh)
-
-            yield {
-                "event": "caption",
-                "data": json.dumps(data)
-            }
-            await asyncio.sleep(5)
-
-    return EventSourceResponse(event_generator())
-
-
 @app.post("/audio")
 async def process_audio(request: Request):
-    """Receive audio chunk, return transcription + translation.
-
-    Accepts raw WAV audio bytes and returns JSON with en (transcription)
-    and zh (Chinese translation).
-
-    Requires FunASR model to be available locally.
-    """
+    """Receive audio chunk, return transcription + translation."""
     global session_logger, current_translator
 
     audio_data = await request.body()
@@ -147,7 +104,6 @@ async def process_audio(request: Request):
     result = {"en": "", "zh": "", "timestamp": datetime.now().isoformat()}
 
     try:
-        # Get transcription from FunASR
         funasr = get_funasr_client()
 
         if funasr is None:
