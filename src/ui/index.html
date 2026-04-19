@@ -264,7 +264,7 @@
                 processor.connect(audioContext.destination);
 
                 // Create audio element for NPR stream
-                hiddenAudio = document.createElement('audio');
+                hiddenAudio = document.getElementById('hiddenAudio');
                 hiddenAudio.src = NPR_STREAM_URL;
                 hiddenAudio.loop = true;
 
@@ -297,6 +297,12 @@
                     await hiddenAudio.play();
                     console.log('NPR audio started playing');
 
+                    // Resume audio context (required for autoplay policy)
+                    if (audioContext.state === 'suspended') {
+                        await audioContext.resume();
+                        console.log('AudioContext resumed');
+                    }
+
                     setTimeout(() => {
                         if (hiddenAudio.paused) {
                             updateDebug('警告: 音频可能没有播放(自动播放策略限制)');
@@ -326,7 +332,6 @@
                 currentMode = 'demo';
                 demoBtn.classList.remove('active');
                 demoBtn.textContent = 'Demo Mode';
-                connectDemoSSE();
             }
         }
 
@@ -382,6 +387,11 @@
                 micSource.connect(processor);
                 processor.connect(audioContext.destination);
 
+                // Resume audio context (required for autoplay policy)
+                if (audioContext.state === 'suspended') {
+                    await audioContext.resume();
+                }
+
                 currentMode = 'live';
                 demoBtn.classList.add('active');
                 demoBtn.textContent = 'Live: Mic';
@@ -397,7 +407,6 @@
                 currentMode = 'demo';
                 demoBtn.classList.remove('active');
                 demoBtn.textContent = 'Demo Mode';
-                connectDemoSSE();
             }
         }
 
@@ -531,7 +540,6 @@
         demoBtn.addEventListener('click', async () => {
             if (currentMode === 'live') {
                 stopLiveMode();
-                connectDemoSSE();
             } else {
                 // Ask user to choose mode
                 const useMic = confirm('使用麥克風？\n\n確定 = 麥克風模式\n取消 = 廣播演示模式');
@@ -543,8 +551,8 @@
             }
         });
 
-        // Default: connect to demo stream
-        connectDemoSSE();
+        // Default: show ready state, wait for user click
+        status.textContent = 'Ready - Click to Start';
     </script>
 </body>
 </html>

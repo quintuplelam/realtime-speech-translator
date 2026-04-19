@@ -154,11 +154,9 @@ async def process_audio(request: Request):
             result["en"] = "Error: FunASR client not initialized"
             return JSONResponse(result)
 
-        # Get transcription
-        text = await asyncio.wait_for(
-            funasr.transcribe(audio_data),
-            timeout=10.0
-        )
+        # Get transcription (FunASR is synchronous, run in thread to not block)
+        import asyncio
+        text = await asyncio.to_thread(funasr.transcribe, audio_data)
 
         if text:
             result["en"] = text
