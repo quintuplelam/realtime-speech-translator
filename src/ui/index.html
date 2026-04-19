@@ -332,7 +332,7 @@
                 demoBtn.classList.remove('loading');
                 currentMode = 'demo';
                 demoBtn.classList.remove('active');
-                demoBtn.textContent = 'Demo Mode';
+                demoBtn.textContent = 'Start Demo';
             }
         }
 
@@ -416,7 +416,7 @@
                 updateDebug(errorMsg);
                 currentMode = 'demo';
                 demoBtn.classList.remove('active');
-                demoBtn.textContent = 'Demo Mode';
+                demoBtn.textContent = 'Start Demo';
             }
         }
 
@@ -547,23 +547,17 @@
         demoBtn.addEventListener('click', async () => {
             if (currentMode === 'live') {
                 stopLiveMode();
-                demoBtn.classList.remove('active');
-                demoBtn.textContent = 'Start Demo';
-                status.textContent = 'Stopped';
-                status.classList.remove('live', 'processing');
             } else {
                 // Ask user to choose mode
                 const useMic = confirm('使用麥克風？\n\n確定 = 麥克風模式\n取消 = 廣播演示模式');
-                if (useMic) {
-                    await startMicMode();
-                    if (currentMode === 'live') {
-                        demoBtn.textContent = 'Stop';
+                try {
+                    if (useMic) {
+                        await startMicMode();
+                    } else {
+                        await startLiveMode();
                     }
-                } else {
-                    await startLiveMode();
-                    if (currentMode === 'live') {
-                        demoBtn.textContent = 'Stop';
-                    }
+                } catch (e) {
+                    console.error('Mode start failed:', e);
                 }
             }
         });
