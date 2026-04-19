@@ -1,18 +1,23 @@
-from fastapi import FastAPI, Request, UploadFile, File
+"""
+RCST API Server - FunASR
+
+FastAPI backend for Realtime Conference Speech Translator.
+Uses FunASR for speech-to-text and Argos Translate for EN↔ZH translation.
+"""
+
+from fastapi import FastAPI, Request
 from fastapi.responses import StreamingResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from sse_starlette.sse import EventSourceResponse
 from fastapi.middleware.cors import CORSMiddleware
 import asyncio
 import json
-import tempfile
-import wave
 from datetime import datetime
-from pathlib import Path
 from typing import Optional
+import httpx
 
 from src.api.logger import SessionLogger
-from src.api.asr import VoxtralASR, VoxtralNotFoundError
+from src.api.funasr_client import FunasrClient
 
 app = FastAPI(title="RCST API")
 
@@ -31,23 +36,75 @@ app.mount("/ui", StaticFiles(directory="src/ui"), name="ui")
 # Global instances
 session_logger: Optional[SessionLogger] = None
 current_translator: Optional[object] = None
+funasr_client: Optional[FunasrClient] = None
 
 # Translator optional - may not be available if argostranslate deps missing
 try:
     from src.api.translator import Translator
     current_translator = Translator()
-except ImportError:
+    print("Argos Translate loaded successfully")
+except ImportError as e:
+    print(f"Warning: Argos Translate not available: {e}")
     current_translator = None
+
+
+def get_funasr_client() -> Optional[FunasrClient]:
+    """Get or create FunASR client instance."""
+    global funasr_client
+    if funasr_client is None:
+        funasr_client = FunasrClient()
+    return funasr_client
 
 
 @app.get("/health")
 async def health():
-    return JSONResponse({"status": "ok", "timestamp": datetime.now().isoformat()})
+    """Health check endpoint."""
+    funasr_loaded = funasr_client is not None
+    return JSONResponse({
+        "status": "ok",
+        "timestamp": datetime.now().isoformat(),
+        "funasr": "loaded" if funasr_loaded else "not_loaded",
+    })
+
+
+@app.get("/proxy/npr")
+async def proxy_npr():
+    """Proxy WNYC FM stream to avoid CORS issues with captureStream().
+
+    The frontend can use this endpoint as an audio source and capture it
+    via Web Audio API without CORS restrictions.
+    """
+    # WNYC FM - New York public radio (news & talk)
+    NPR_URL = "https://fm939.wnyc.org/wnycfm"
+
+    async def stream_generator():
+        try:
+            async with httpx.AsyncClient(timeout=60.0, follow_redirects=True) as client:
+                async with client.stream("GET", NPR_URL) as response:
+                    async for chunk in response.aiter_bytes(chunk_size=8192):
+                        yield chunk
+        except Exception as e:
+            print(f"NPR proxy error: {e}")
+
+    return StreamingResponse(
+        stream_generator(),
+        media_type="audio/mpeg",
+        headers={
+            "Access-Control-Allow-Origin": "*",
+            "Access-Control-Allow-Methods": "GET",
+            "Access-Control-Allow-Headers": "*",
+            "Cache-Control": "no-cache",
+        }
+    )
 
 
 @app.get("/stream")
 async def stream(request: Request):
-    """SSE endpoint for real-time caption stream (demo mode)."""
+    """SSE endpoint for real-time caption stream (demo mode).
+
+    This is a fallback/demo mode that returns simulated captions.
+    For production, use /audio endpoint with live audio capture.
+    """
     async def event_generator():
         demo_captions = [
             ("Welcome to the International Conference.", "歡迎參加國際會議。"),
@@ -72,48 +129,41 @@ async def stream(request: Request):
 
 
 @app.post("/audio")
-async def process_audio(file: UploadFile = File(...)):
+async def process_audio(request: Request):
     """Receive audio chunk, return transcription + translation.
 
-    Accepts WAV audio file and returns JSON with en (transcription)
+    Accepts raw WAV audio bytes and returns JSON with en (transcription)
     and zh (Chinese translation).
+
+    Requires FunASR model to be available locally.
     """
     global session_logger, current_translator
 
-    # Save uploaded audio to temp file
-    with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as f:
-        temp_path = f.name
-        content = await file.read()
+    audio_data = await request.body()
 
-        # Write to WAV file
-        with wave.open(temp_path, 'wb') as w:
-            w.setnchannels(1)
-            w.setsampwidth(2)
-            w.setframerate(16000)
-            # Assume raw PCM data (convert from float32 to int16)
-            import struct
-            import numpy as np
-            # Try to interpret as float32 PCM
-            try:
-                samples = np.frombuffer(content, dtype=np.float32)
-                samples_int = (samples * 32767).astype(np.int16)
-            except:
-                # If already int16, use directly
-                samples_int = np.frombuffer(content, dtype=np.int16)
-
-            w.writeframes(samples_int.tobytes())
+    if not audio_data or len(audio_data) == 0:
+        return JSONResponse({"en": "", "zh": "", "error": "No audio data received"})
 
     result = {"en": "", "zh": "", "timestamp": datetime.now().isoformat()}
 
     try:
-        # ASR using mock mode (Voxtral not installed)
-        asr = VoxtralASR(mock_mode=True)
-        text = asr.transcribe(temp_path)
+        # Get transcription from FunASR
+        funasr = get_funasr_client()
+
+        if funasr is None:
+            result["en"] = "Error: FunASR client not initialized"
+            return JSONResponse(result)
+
+        # Get transcription
+        text = await asyncio.wait_for(
+            funasr.transcribe(audio_data),
+            timeout=10.0
+        )
 
         if text:
             result["en"] = text
 
-            # Translate
+            # Translate EN→ZH
             if current_translator:
                 zh = current_translator.translate(text, "en", "zh")
                 result["zh"] = zh or ""
@@ -122,12 +172,11 @@ async def process_audio(file: UploadFile = File(...)):
             if session_logger and text:
                 session_logger.log(text, result["zh"])
 
+    except asyncio.TimeoutError:
+        result["en"] = ""
+        result["zh"] = ""
     except Exception as e:
         result["en"] = f"Error: {str(e)}"
-
-    finally:
-        import os
-        os.unlink(temp_path)
 
     return JSONResponse(result)
 
@@ -140,29 +189,3 @@ async def start_session(session_id: str = None):
         session_id = datetime.now().strftime("%Y%m%d_%H%M%S")
     session_logger = SessionLogger("sessions", session_id)
     return JSONResponse({"session_id": session_id, "path": str(session_logger.session_dir)})
-
-
-# Keep old pipeline endpoints for compatibility but they won't work without Voxtral
-@app.post("/pipeline/start")
-async def start_pipeline(Request: Request):
-    """Start a broadcast stream pipeline (deprecated - use /audio instead)."""
-    body = await Request.json()
-    stream_url = body.get("stream_url")
-    pipeline_id = datetime.now().strftime("%Y%m%d_%H%M%S")
-    return JSONResponse({
-        "pipeline_id": pipeline_id,
-        "stream_url": stream_url,
-        "message": "Deprecated: Use frontend audio capture instead"
-    })
-
-
-@app.get("/pipeline/{pipeline_id}/stream")
-async def pipeline_stream(pipeline_id: str):
-    """SSE stream for pipeline captions (deprecated)."""
-    return JSONResponse({"error": "Deprecated: Use /audio endpoint instead"}, status_code=410)
-
-
-@app.post("/pipeline/stop")
-async def stop_pipeline(Request: Request):
-    """Stop a running pipeline (deprecated)."""
-    return JSONResponse({"status": "stopped", "message": "Deprecated"})
